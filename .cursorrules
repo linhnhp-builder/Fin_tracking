@@ -1,0 +1,260 @@
+# FinTrack AI — Cursor Rules
+# AI assistant context for this codebase. Read before making any changes.
+# Last updated: March 2026 (v1.3)
+
+---
+
+## 1. Project Context
+
+FinTrack AI is a **personal finance management web application** targeting Vietnamese millennials.
+It features AI-powered transaction recording via natural language, budget tracking with color alerts,
+investment portfolio management, and financial reports.
+
+**Full documentation is in `docs/ai/`:**
+- `docs/ai/architecture.md`  — System architecture, domain modules, data flow
+- `docs/ai/conventions.md`   — Naming conventions, coding patterns, anti-patterns
+- `docs/ai/data-model.md`    — All 9 database tables with column types and relationships
+- `docs/ai/known-issues.md`  — Active bugs with root causes and exact fixes needed
+
+**Always read the relevant docs/ai/ file before modifying a domain.**
+
+---
+
+## 2. Tech Stack
+
+| Layer | Technology | Version |
+|---|---|---|
+| Frontend framework | React | 19 |
+| Language | TypeScript | 5.9 |
+| Styling | Tailwind CSS | 4 |
+| Component library | shadcn/ui + Radix UI | latest |
+| API layer | tRPC | 11 |
+| ORM | Drizzle ORM | 0.44 |
+| Database | MySQL (TiDB) | — |
+| Auth | Manus OAuth (JWT cookies) | — |
+| AI/LLM | Manus Forge API (OpenAI-compatible) | — |
+| Charts | Recharts | 2 |
+| Icons | lucide-react | 0.453 |
+| Routing | wouter | 3 |
+| Forms | react-hook-form + zod | — |
+| Toasts | sonner | 2 |
+| Date utils | date-fns | 4 |
+
+---
+
+## 3. Project Structure
+
+```
+fintrack-ai/
+├── client/src/
+│   ├── pages/          ← Feature pages (Dashboard, Categories, Transactions, AIChat, Investments, Reports)
+│   ├── components/     ← Reusable components (DashboardLayout, shadcn/ui)
+│   ├── lib/
+│   │   ├── trpc.ts     ← tRPC client binding
+│   │   └── utils.ts    ← cn() helper + legacy utilities (kept for backward compat)
+│   ├── App.tsx         ← Routes + ThemeProvider
+│   └── index.css       ← Global design tokens (OKLCH colors, Inter font)
+├── server/
+│   ├── routers.ts      ← All tRPC procedures (split by domain)
+│   ├── db.ts           ← Drizzle query helpers (one function per operation)
+│   └── _core/          ← Framework plumbing (DO NOT EDIT)
+├── drizzle/
+│   └── schema.ts       ← Source of truth for all DB tables
+├── shared/
+│   ├── const.ts        ← Shared constants (COOKIE_NAME, etc.)
+│   ├── types.ts        ← Shared TypeScript types
+│   ├── date/index.ts   ← Date utilities (todayString, formatDate, getCurrentMonthYear...)
+│   └── currency/index.ts ← Money utilities (formatVND, parseMoneyText, getBudgetProgressColor...)
+└── docs/ai/            ← AI assistant documentation (architecture, conventions, data model, known issues)
+```
+
+---
+
+## 4. Domain Modules
+
+The app is organized into 8 feature domains. Each domain has:
+- A router section in `server/routers.ts`
+- Query helpers in `server/db.ts`
+- A page in `client/src/pages/`
+
+| Domain | Router prefix | Page | Description |
+|---|---|---|---|
+| Auth | `auth.*` | — | OAuth login/logout, session management |
+| Category | `category.*` | `Categories.tsx` | CRUD for income/expense categories |
+| Transaction | `transaction.*` | `Transactions.tsx` | Manual and AI-assisted transaction entry |
+| Budget | `category.recalcBudgets` | `Categories.tsx` | Budget limits with color engine |
+| AI Chat | `ai.*` | `AIChat.tsx` | Vietnamese NLP transaction recording |
+| Investment | `investment.*` | `Investments.tsx` | Gold/silver/savings/lending portfolio |
+| Market | `market.*` | Dashboard + Investments | Gold/silver price fetching with 5-min cache |
+| Report | `report.*` | `Reports.tsx` | Monthly breakdown, YoY comparison |
+| Dashboard | Uses report + category | `Dashboard.tsx` | Summary widgets + market ticker |
+
+---
+
+## 5. Critical Coding Rules
+
+### ALWAYS follow these patterns:
+
+**1. Filter by userId in every DB query**
+```typescript
+// ✅ Always include userId filter
+.where(and(eq(transactions.userId, userId), eq(transactions.isDeleted, false)))
+```
+
+**2. Date fields are varchar(10) strings — NEVER Date objects**
+```typescript
+// ✅ Correct
+const transactionDate = new Date().toISOString().split("T")[0]; // "2026-03-12"
+// ❌ Wrong
+const transactionDate = new Date(); // causes DB type error
+```
+
+**3. Decimal DB columns return as strings — always Number() before math**
+```typescript
+// ✅ Correct
+const pct = Number(budget.pctUsed);
+// ❌ Wrong
+const pct = budget.pctUsed * 100; // NaN
+```
+
+**4. Soft delete only — never hard delete**
+```typescript
+// ✅ Correct
+await db.update(transactions).set({ isDeleted: true }).where(...)
+// ❌ Wrong
+await db.delete(transactions).where(...)
+```
+
+**5. After any transaction mutation, recalc budgets**
+```typescript
+// In db.ts after insert/update/delete of expense transactions:
+await recalcBudgetSpent(categoryId);
+```
+
+**6. Invalidate all affected queries after mutations**
+```typescript
+// In client after transaction create/delete:
+utils.transaction.list.invalidate();
+utils.category.list.invalidate();
+utils.report.monthly.invalidate();
+utils.report.yoy.invalidate();
+```
+
+**7. Money inputs must use thousand-separator pattern**
+```typescript
+// Use Intl.NumberFormat("vi-VN") for display; store raw integer in state
+const handleAmountChange = (e) => {
+  const raw = e.target.value.replace(/\./g, "").replace(/[^0-9]/g, "");
+  setAmount(parseInt(raw) || 0);
+  setDisplayAmount(raw ? new Intl.NumberFormat("vi-VN").format(parseInt(raw)) : "");
+};
+```
+
+---
+
+## 6. Shared Utilities
+
+**Date utilities** — `shared/date/index.ts`:
+```typescript
+import { todayString, formatDate, getCurrentMonthYear, monthPrefix, daysBetween } from "@shared/date";
+// OR from server:
+import { todayString } from "../shared/date";
+```
+
+**Currency utilities** — `shared/currency/index.ts`:
+```typescript
+import { formatVND, formatCompact, parseMoneyText, getBudgetProgressColor, calcSimpleInterest } from "@shared/currency";
+// OR from server:
+import { formatVND } from "../shared/currency";
+```
+
+**Legacy utilities** — `client/src/lib/utils.ts`:
+```typescript
+import { cn, formatVND, getBudgetProgressColor } from "@/lib/utils";
+// Still works — kept for backward compatibility
+```
+
+---
+
+## 7. Known Issues (DO NOT REINTRODUCE)
+
+### ISSUE-001 — AI Chat API format (RESOLVED)
+`callAI()` now uses OpenAI API (`gpt-4o`) with correct message format.
+System prompt is `messages[0]` with `role: "system"`. Auth via `ENV.openaiApiKey`.
+**Do NOT revert to Anthropic format or `system` top-level field.**
+
+### ISSUE-002 — Market price API (OPEN)
+`api.metals.live` is blocked in sandbox. Use Yahoo Finance `GC=F`/`SI=F` or SJC API instead.
+**Do NOT add new calls to `api.metals.live`.**
+
+### ISSUE-003 — Reports not refreshing after delete (OPEN)
+`deleteMutation.onSuccess` in `Transactions.tsx` is missing `report.*` invalidation.
+**When fixing, add:** `utils.report.monthly.invalidate()` and `utils.report.yoy.invalidate()`
+
+### ISSUE-004 — No transaction edit (OPEN)
+Only add and soft-delete exist. Edit requires: `updateTransaction()` in db.ts + `transaction.update` procedure + EditDialog in Transactions.tsx.
+
+### ISSUE-006 — Template TS errors (IGNORE)
+5 TypeScript errors in `Markdown.tsx` and `ComponentShowcase.tsx` are from the platform scaffold.
+**Do NOT modify these files.** The errors are non-blocking and safe to ignore.
+
+Full details: `docs/ai/known-issues.md`
+
+---
+
+## 8. Design System
+
+**Theme:** Light mode only, black/white minimalist, targeting millennials.
+
+**Font:** Inter (Google Fonts CDN in `client/index.html`)
+
+**Color palette (OKLCH in `client/src/index.css`):**
+- Background: `oklch(1 0 0)` (white)
+- Foreground: `oklch(0.145 0 0)` (near-black)
+- Accent: `oklch(0.97 0 0)` (light gray)
+- Budget green: `#10B981` (< 60% spent)
+- Budget yellow: `#F59E0B` (60–85% spent)
+- Budget orange: `#F97316` (85–100% spent)
+- Budget red: `#EF4444` (> 100% spent)
+
+**Layout:** DashboardLayout with sidebar navigation (6 items: Dashboard, Giao dịch, Danh mục, Đầu tư, Báo cáo, AI Chat).
+
+**Components:** Always use shadcn/ui from `@/components/ui/*`. Never build custom modal/select/button from scratch.
+
+---
+
+## 9. Environment Variables
+
+Never hardcode secrets. Use `ENV` from `server/_core/env.ts` on server side.
+Frontend uses `import.meta.env.VITE_*`.
+
+Available server ENV keys:
+- `ENV.forgeApiKey` — LLM API key (BUILT_IN_FORGE_API_KEY)
+- `ENV.forgeApiUrl` — LLM API URL (BUILT_IN_FORGE_API_URL)
+- `ENV.ownerOpenId` — Owner's Manus ID (OWNER_OPEN_ID)
+- `ENV.jwtSecret` — Session signing secret (JWT_SECRET)
+
+---
+
+## 10. Testing
+
+Run: `pnpm test`
+Test files: `server/*.test.ts` (Vitest)
+Reference: `server/auth.logout.test.ts` and `server/fintrack.test.ts`
+
+Always write tests for:
+- New tRPC procedures (happy path + error cases)
+- Budget calculation logic
+- Currency/date utility functions
+
+---
+
+## 11. Common Commands
+
+```bash
+pnpm dev          # Start dev server (port 3000)
+pnpm test         # Run all Vitest tests
+pnpm db:push      # Generate + apply Drizzle migrations
+pnpm check        # TypeScript type check (5 template errors are expected)
+pnpm build        # Production build
+```

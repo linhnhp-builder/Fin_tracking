@@ -1,0 +1,55 @@
+---
+description: FinTrack AI — project context, domain map, stack, and documentation links. Always active.
+alwaysApply: true
+---
+
+# FinTrack AI — Core Context
+
+**App:** Personal finance web app for Vietnamese millennials. Features: AI-assisted transaction recording (Vietnamese NLP), budget tracking with color alerts, investment portfolio, financial reports.
+
+**Full docs:** Always read the relevant file before modifying a domain.
+- `docs/ai/architecture.md` — system architecture, domain modules, data flows
+- `docs/ai/data-model.md` — all 9 DB tables with column types and relationships
+- `docs/ai/conventions.md` — naming conventions, coding patterns, anti-patterns
+- `docs/ai/known-issues.md` — active bugs with root causes and exact fixes
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, TypeScript 5.9, Tailwind CSS 4, shadcn/ui |
+| API | tRPC 11 (no REST endpoints) |
+| ORM / DB | Drizzle ORM 0.44 + PostgreSQL (Supabase) |
+| Auth | JWT session cookie — `protectedProcedure` in every protected route |
+| AI/LLM | OpenAI-compatible API via `ENV.forgeApiKey` / `ENV.forgeApiUrl` |
+| Routing | wouter 3 |
+| Charts | Recharts 2 |
+| Icons | lucide-react |
+
+## Domain Map
+
+| Domain | Router prefix | Page file |
+|---|---|---|
+| Auth | `auth.*` | — (DashboardLayout guard) |
+| Category + Budget | `category.*` | `Categories.tsx` |
+| Transaction | `transaction.*` | `Transactions.tsx` |
+| AI Chat | `ai.*` | `AIChat.tsx` |
+| Investment | `investment.*` | `Investments.tsx` |
+| Market | `market.*` | Dashboard + Investments |
+| Report | `report.*` | `Reports.tsx` |
+| Dashboard | (aggregates above) | `Dashboard.tsx` |
+
+## Environment Variables
+
+```typescript
+// Server side — use ENV from server/_core/env.ts
+ENV.forgeApiKey   // LLM API key
+ENV.forgeApiUrl   // LLM API URL
+ENV.jwtSecret     // Session signing
+ENV.ownerOpenId   // Admin/seed subject id
+
+// Client side — Vite
+import.meta.env.VITE_*
+```
+
+Never hardcode secrets. Never import ENV on the client.

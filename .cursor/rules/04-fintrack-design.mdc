@@ -1,0 +1,71 @@
+---
+description: FinTrack AI — design system rules. Component library, color tokens, typography, icons, layout, and responsive patterns.
+globs: "client/**/*.{tsx,css}"
+alwaysApply: false
+---
+
+# FinTrack AI — Design System
+
+## 1. Components — shadcn/ui only
+
+```typescript
+// ✅
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+// ❌ Never build custom modal, select, button, or input from scratch
+```
+
+All shadcn/ui components live in `client/src/components/ui/`. Do not install other component libraries.
+
+## 2. Icons — lucide-react only
+
+```typescript
+import { Plus, Trash2, Pencil, TrendingUp, TrendingDown } from "lucide-react";
+// ❌ No heroicons, react-icons, or SVG inlines
+```
+
+Standard sizes: `h-4 w-4` (default), `h-3.5 w-3.5` (compact), `h-5 w-5` (prominent).
+
+## 3. Color tokens — use CSS variables, not hardcoded hex
+
+```css
+/* Design tokens from client/src/index.css (OKLCH) */
+background: oklch(1 0 0)        /* white */
+foreground: oklch(0.145 0 0)    /* near-black */
+muted:      oklch(0.97 0 0)     /* light gray */
+```
+
+```typescript
+// Budget color constants — use these values exactly
+const BUDGET_COLORS = {
+  green:  "#10B981",  // < 60% spent
+  yellow: "#F59E0B",  // 60–85% spent
+  orange: "#F97316",  // 85–100% spent
+  red:    "#EF4444",  // > 100% spent
+};
+// Or use getBudgetProgressColor(pctUsed) from @/lib/utils
+```
+
+Never hardcode other hex values for status colors. Use Tailwind semantic classes (`text-emerald-600`, `text-red-500`, `text-amber-600`, `text-orange-500`) for text/badge status.
+
+## 4. Typography
+
+- **Font:** Inter (loaded via CDN in `client/index.html`) — do not change or override
+- **Numbers:** always add `num tabular-nums` class on monetary/numeric values for consistent digit width
+- **Headings:** `text-2xl font-bold tracking-tight` (page title), `text-xs font-semibold uppercase tracking-wide text-muted-foreground` (section label)
+
+## 5. Layout & Spacing
+
+- **Page wrapper:** `p-3 sm:p-6 max-w-5xl mx-auto space-y-4 sm:space-y-6`
+- **Card grid:** `grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3`
+- **Responsive:** mobile-first — base styles for mobile, `sm:` for tablet+
+- **DashboardLayout** wraps all routes — do NOT wrap a page in another layout
+
+## 6. Theme
+
+- **Light mode only** — no dark mode toggle per design spec
+- Do not add `dark:` variants unless they already exist in the file
+- Background is white; avoid colored page backgrounds

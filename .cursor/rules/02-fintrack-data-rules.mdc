@@ -1,0 +1,64 @@
+---
+description: FinTrack AI — server-side DB rules. Enforces userId scoping, soft delete, date/decimal types, and budget recalc.
+globs: server/**/*.ts
+alwaysApply: false
+---
+
+# FinTrack AI — Server / DB Rules
+
+## 1. Always filter by userId
+
+Every query on user-owned data must include `userId` in the WHERE clause.
+
+```typescript
+// ✅
+.where(and(eq(transactions.userId, userId), eq(transactions.isDeleted, false)))
+
+// ❌ Missing userId — exposes other users' data
+.where(eq(transactions.isDeleted, false))
+```
+
+## 2. Soft delete only — never hard delete
+
+```typescript
+// ✅
+await db.update(transactions).set({ isDeleted: true }).where(...)
+
+// ❌
+await db.delete(transactions).where(...)
+```
+
+## 3. Dates are varchar(10) strings — never Date objects
+
+```typescript
+// ✅
+const transactionDate = new Date().toISOString().split("T")[0]; // "2026-03-24"
+
+// ❌ — causes Drizzle type error
+const transactionDate = new Date();
+```
+
+## 4. Decimal columns return as strings — Number() before math
+
+```typescript
+// ✅
+const pct = Number(budget.pctUsed) * 100;
+
+// ❌ — produces NaN
+const pct = budget.pctUsed * 100;
+```
+
+## 5. Recalc budgets after every expense transaction mutation
+
+```typescript
+// In db.ts — after insert, update, or soft-delete of an expense transaction:
+await recalcBudgetSpent(categoryId);
+```
+
+## 6. Market API — do NOT use api.metals.live (ISSUE-002)
+
+Use Yahoo Finance `GC=F` / `SI=F` or SJC API instead. `api.metals.live` is blocked.
+
+## 7. Source of truth for schema
+
+`drizzle/schema.ts` is the single source of truth for all tables. Never hand-write SQL; always use Drizzle query builder.

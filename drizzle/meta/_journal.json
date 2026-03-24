@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1773103642508,
+      "tag": "0000_lame_namora",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1773103806014,
+      "tag": "0001_thin_hawkeye",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1773104200099,
+      "tag": "0002_furry_ezekiel_stane",
+      "breakpoints": true
+    }
+  ]
+}

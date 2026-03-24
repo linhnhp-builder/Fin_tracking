@@ -1,0 +1,97 @@
+---
+description: FinTrack AI — client-side patterns. tRPC usage, query invalidation, money input, shared utilities, routing, and toasts.
+globs: client/**/*.tsx
+alwaysApply: false
+---
+
+# FinTrack AI — Frontend Patterns
+
+## 1. tRPC — only data layer, no fetch/axios
+
+```typescript
+// ✅ Query
+const { data, isLoading } = trpc.category.list.useQuery();
+
+// ✅ Mutation
+const mut = trpc.transaction.create.useMutation({ onSuccess: () => { ... } });
+
+// ❌ Never use fetch() or axios for app data
+```
+
+## 2. Invalidate all affected queries after mutations
+
+After any transaction create / update / delete, invalidate the full set:
+
+```typescript
+const utils = trpc.useUtils();
+
+// After transaction mutation:
+utils.transaction.list.invalidate();
+utils.category.list.invalidate();
+utils.report.monthly.invalidate();
+utils.report.yoy.invalidate();
+utils.report.budgetStatus.invalidate();
+
+// Then recalc budgets:
+recalcBudgetsMutation.mutate();
+```
+
+Missing an invalidation = stale data on other pages until manual refresh.
+
+## 3. Money input — vi-VN thousand separators
+
+```typescript
+// Display with separators; store raw number
+function fmtNum(val: string): string {
+  const raw = val.replace(/[^0-9]/g, "");
+  return raw ? parseInt(raw, 10).toLocaleString("vi-VN") : "";
+}
+function parseNum(val: string): number {
+  return parseFloat(val.replace(/\./g, "").replace(/,/g, "")) || 0;
+}
+```
+
+## 4. Use shared utilities — never re-implement
+
+```typescript
+import { formatVND, formatVNDShort, formatDate, todayString,
+         getCurrentMonthYear, ensureNumber, getBudgetProgressColor } from "@/lib/utils";
+```
+
+- `formatVND(n)` — full VNĐ with separators
+- `formatVNDShort(n)` — compact (tr / k)
+- `todayString()` — today as `"YYYY-MM-DD"`
+- `ensureNumber(v)` — safe Number() with 0 fallback
+- Never call `new Intl.NumberFormat(...)` directly in page components
+
+## 5. Routing — wouter only
+
+```typescript
+import { Link, useLocation } from "wouter";
+// ❌ Never import from react-router-dom
+```
+
+## 6. Toasts — sonner only
+
+```typescript
+import { toast } from "sonner";
+toast.success("Đã lưu");
+toast.error(e.message);
+// ❌ Never use window.alert() or custom toast
+```
+
+## 7. Page layout pattern
+
+Every new page must be wrapped by `DashboardLayout` automatically (via `App.tsx` routes). Do not add a second layout wrapper inside a page component.
+
+```typescript
+// New page template
+export default function MyNewPage() {
+  return (
+    <div className="p-3 sm:p-6 max-w-5xl mx-auto space-y-4">
+      <h1 className="text-2xl font-bold tracking-tight">Page Title</h1>
+      {/* content */}
+    </div>
+  );
+}
+```
