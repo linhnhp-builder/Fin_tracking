@@ -2,7 +2,7 @@
 # Creates a private GitHub repo and pushes branch main. Requires a PAT (never commit it).
 # Usage:
 #   export GITHUB_TOKEN=ghp_xxxx   # classic: "repo" scope; fine-grained: Contents + Metadata
-#   ./scripts/create-github-repo.sh [repo-name]
+#   ./scripts/create-github-repo.sh [repo-name]   # default: fintrackingAI
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -13,7 +13,7 @@ if [[ -z "$TOKEN" ]]; then
   exit 1
 fi
 
-NAME="${1:-fintrack-ai}"
+NAME="${1:-fintrackingAI}"
 if git remote get-url origin &>/dev/null; then
   echo "Remote 'origin' already exists:" >&2
   git remote -v >&2
