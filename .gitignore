@@ -109,5 +109,4 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
-.env
 supabase/migrations
