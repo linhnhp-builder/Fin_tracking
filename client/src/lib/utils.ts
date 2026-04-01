@@ -87,6 +87,7 @@ export const ASSET_TYPE_LABELS: { [key: string]: string } = {
   gold: "Vàng",
   silver: "Bạc",
   savings: "Tiết kiệm",
+  realestate: "BDS",
   lending: "Cho vay",
 };
 
@@ -95,5 +96,6 @@ export const ASSET_TYPE_ICONS: { [key: string]: string } = {
   gold: "🥇",
   silver: "🥈",
   savings: "🏦",
+  realestate: "🏠",
   lending: "💳",
 };

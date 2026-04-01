@@ -139,32 +139,26 @@ export const investmentTransactions = pgTable("investment_transactions", {
 export type InvestmentTransaction = typeof investmentTransactions.$inferSelect;
 export type InsertInvestmentTransaction = typeof investmentTransactions.$inferInsert;
 
-// ─── Price Snapshots ──────────────────────────────────────────────────────────
-export const priceSnapshots = pgTable("price_snapshots", {
-  id:        serial("id").primaryKey(),
-  assetType: text("assetType").notNull(),
-  source:    text("source").default("SJC"),
-  buyPrice:  numeric("buyPrice",  { precision: 15, scale: 0 }),
-  sellPrice: numeric("sellPrice", { precision: 15, scale: 0 }),
-  unit:      text("unit").default("luong"),
-  fetchedAt: timestamp("fetchedAt", { withTimezone: true }).defaultNow().notNull(),
-}, (t) => [index("price_snapshots_asset_idx").on(t.assetType, t.fetchedAt)]);
+// ─── n8n market feeds (FinTrack v3.1) ─────────────────────────────────────
+export const goldN8nFeed = pgTable("gold_n8n_feed", {
+  id:         serial("id").primaryKey(),
+  payload:    jsonb("payload").notNull(),
+  source:     text("source"),
+  ingestedAt: timestamp("ingestedAt", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("gold_n8n_feed_ingested_idx").on(t.ingestedAt)]);
 
-export type PriceSnapshot = typeof priceSnapshots.$inferSelect;
-export type InsertPriceSnapshot = typeof priceSnapshots.$inferInsert;
+export type GoldN8nFeed = typeof goldN8nFeed.$inferSelect;
+export type InsertGoldN8nFeed = typeof goldN8nFeed.$inferInsert;
 
-// ─── Market Brand Prices (Gold/Silver) ───────────────────────────────────────
-// Used by UI to allow manual input per brand (e.g. SJC/PNJ for gold, Phú Quý 1kg/1 lượng for silver).
-export const marketBrandPrices = pgTable("market_brand_prices", {
-  id:        serial("id").primaryKey(),
-  assetType: assetTypeEnum("assetType").notNull(),
-  brand:     text("brand").notNull(),
-  buyPrice:  numeric("buyPrice", { precision: 15, scale: 2 }).notNull(),
-  fetchedAt: timestamp("fetchedAt", { withTimezone: true }).defaultNow().notNull(),
-}, (t) => [index("market_brand_prices_asset_brand_idx").on(t.assetType, t.brand)]);
+export const silverN8nFeed = pgTable("silver_n8n_feed", {
+  id:         serial("id").primaryKey(),
+  payload:    jsonb("payload").notNull(),
+  source:     text("source"),
+  ingestedAt: timestamp("ingestedAt", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("silver_n8n_feed_ingested_idx").on(t.ingestedAt)]);
 
-export type MarketBrandPrice = typeof marketBrandPrices.$inferSelect;
-export type InsertMarketBrandPrice = typeof marketBrandPrices.$inferInsert;
+export type SilverN8nFeed = typeof silverN8nFeed.$inferSelect;
+export type InsertSilverN8nFeed = typeof silverN8nFeed.$inferInsert;
 
 // ─── AI Conversations ─────────────────────────────────────────────────────────
 export const aiConversations = pgTable("ai_conversations", {

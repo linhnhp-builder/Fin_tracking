@@ -179,13 +179,15 @@ export default function Transactions() {
   }
 
   const filteredTxs = useMemo(() => {
-    if (!search) return txList;
+    const list = txList as TxWithCategory[];
+    if (!search) return list;
     const q = search.toLowerCase();
-    return txList.filter(
+    return list.filter(
       (t) =>
-        t.tx.note?.toLowerCase().includes(q) ||
-        t.category.name.toLowerCase().includes(q) ||
-        t.tx.locationName?.toLowerCase().includes(q)
+        (t.tx.note != null && String(t.tx.note).toLowerCase().includes(q)) ||
+        String(t.category.name).toLowerCase().includes(q) ||
+        (t.tx.locationName != null &&
+          String(t.tx.locationName).toLowerCase().includes(q))
     );
   }, [txList, search]);
 

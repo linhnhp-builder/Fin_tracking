@@ -62,10 +62,24 @@
  */
 
 import { memo, type ReactNode, type ComponentProps } from "react";
-import { Streamdown } from "streamdown";
-import { code } from "@streamdown/code";
-import { mermaid } from "@streamdown/mermaid";
+import { Streamdown, type ControlsConfig } from "streamdown";
 import { cn } from "@/lib/utils";
+
+function resolveStreamdownControls(
+  controls: ControlsConfig | undefined,
+  enableCode: boolean,
+  enableMermaid: boolean
+): ControlsConfig {
+  if (controls === false) return false;
+  if (!enableCode || !enableMermaid) {
+    return {
+      ...(typeof controls === "object" && controls !== null ? controls : {}),
+      code: enableCode,
+      mermaid: enableMermaid,
+    };
+  }
+  return controls ?? true;
+}
 
 // ============================================================================
 // DEFAULT COMPONENT OVERRIDES
@@ -166,13 +180,15 @@ const components = {
 // MARKDOWN COMPONENT
 // ============================================================================
 
-type MarkdownProps = Omit<ComponentProps<typeof Streamdown>, "components" | "plugins"> & {
+type MarkdownProps = Omit<ComponentProps<typeof Streamdown>, "components" | "controls"> & {
   /** Override specific element renderers */
   components?: Partial<typeof components>;
   /** Enable/disable code syntax highlighting (default: true) */
   enableCode?: boolean;
   /** Enable/disable mermaid diagrams (default: true) */
   enableMermaid?: boolean;
+  /** Passed through to Streamdown after merging with enableCode / enableMermaid */
+  controls?: ControlsConfig;
 };
 
 /**
@@ -206,20 +222,14 @@ export const Markdown = memo(function Markdown({
   enableMermaid = true,
   ...props
 }: MarkdownProps) {
-  // Build plugins object based on what's enabled
-  // @see https://streamdown.ai/docs/code-blocks
-  // @see https://streamdown.ai/docs/mermaid
-  const plugins: Record<string, unknown> = {};
-  if (enableCode) plugins.code = code;
-  if (enableMermaid) plugins.mermaid = mermaid;
+  const controlsMerged = resolveStreamdownControls(controls, enableCode, enableMermaid);
 
   return (
     <Streamdown
       className={cn("text-foreground leading-relaxed", className)}
       components={{ ...components, ...customComponents }}
-      plugins={plugins}
       shikiTheme={shikiTheme}
-      controls={controls}
+      controls={controlsMerged}
       {...props}
     >
       {children}

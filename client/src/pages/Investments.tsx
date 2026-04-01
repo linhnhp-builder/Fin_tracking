@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { formatVND, ASSET_TYPE_LABELS, ASSET_TYPE_ICONS } from "@/lib/utils";
+import { formatVND, cn, ASSET_TYPE_LABELS, ASSET_TYPE_ICONS } from "@/lib/utils";
+import { computeInvestmentCurrentValue } from "@/lib/investmentCurrentValue";
+import { InvestmentCard, type Investment } from "@/components/investments/InvestmentCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 // (no Dialog component used anymore; market prices are edited inline per tab)
@@ -12,32 +14,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Drawer, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Plus, Trash2, TrendingUp, TrendingDown, Calculator, Pencil, ChevronDown, ChevronUp, Eye, CalendarDays } from "lucide-react";
-
-type Investment = {
-  id: number;
-  userId: number;
-  name: string;
-  assetType: "gold" | "silver" | "savings" | "lending";
-  quantity: string | null;
-  unit: string | null;
-  totalInvested: string;
-  avgCost: string | null;
-  currentValue: string | null;
-  pnl: string | null;
-  pnlPct: string | null;
-  status: "holding" | "sold" | "matured" | null;
-  metadata: unknown;
-  isDeleted: boolean | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
+import { Plus, Trash2, TrendingUp, TrendingDown, Calculator, Pencil, ChevronDown, ChevronUp, Eye, CalendarDays, RefreshCw } from "lucide-react";
 
 type TermUnit = "week" | "month" | "year";
 
 type FormData = {
   name: string;
-  assetType: "gold" | "silver" | "savings" | "lending";
+  assetType: "gold" | "silver" | "savings";
   brand: string;
   purchaseDate: string;
   quantity: string;
@@ -48,10 +31,6 @@ type FormData = {
   ratePct: string;
   termValue: string;
   termUnit: TermUnit;
-  lendingRatePct: string;
-  lendingTermValue: string;
-  lendingTermUnit: TermUnit;
-  dueDate: string;
 };
 
 const getDefaultForm = (): FormData => ({
@@ -67,10 +46,6 @@ const getDefaultForm = (): FormData => ({
   ratePct: "",
   termValue: "",
   termUnit: "month",
-  lendingRatePct: "",
-  lendingTermValue: "",
-  lendingTermUnit: "month",
-  dueDate: "",
 });
 
 const ASSET_UNITS: Record<string, string> = {
@@ -87,8 +62,9 @@ const TERM_UNIT_LABELS: Record<TermUnit, string> = {
 };
 
 const GOLD_BRANDS = ["SJC", "PNJ", "Doji", "Mi Hồng", "Others"] as const;
-const SILVER_BRANDS = ["Phú Quý 1kg", "Phú Quý 1 lượng", "Ancarat 1kg", "Ancarat 1 lượng"] as const;
-const INVESTMENT_VIEW_VERSION: "v2.0" | "v2.1" = "v2.1";
+/** Chỉ Phú Quý — mọi vị thế bạc định giá theo bảng Phú Quý (kg / lượng). */
+const SILVER_BRANDS = ["Phú Quý 1kg", "Phú Quý 1 lượng"] as const;
+const INVESTMENT_VIEW_VERSION = "v3.1";
 
 /** Strip non-digits and format with thousand separators */
 function formatInputNumber(val: string): string {
@@ -232,180 +208,8 @@ function SavingsCalculator() {
   );
 }
 
-function InvestmentCard({
-  inv,
-  brandPrices,
-  marketPrices,
-  onDelete,
-}: {
-  inv: Investment;
-  brandPrices: { gold?: Record<string, number>; silver?: Record<string, number> } | null;
-  marketPrices: { gold: number; silver: number } | null;
-  onDelete: (id: number) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  const currentValue = useMemo(() => {
-    if (inv.assetType === "gold" && inv.quantity) {
-      const meta = (inv.metadata ?? {}) as Record<string, unknown>;
-      const brand = String(meta.brand ?? "");
-      const price = brandPrices?.gold?.[brand];
-      if (price != null && price > 0) return Number(inv.quantity) * price;
-
-      // Fallback for legacy rows (no brand prices): market.prices.gold is VNĐ/lượng
-      const unit = String(inv.unit ?? "").toLowerCase();
-      const qty = Number(inv.quantity);
-      if (marketPrices?.gold && qty > 0) {
-        if (unit.includes("ch") || unit.includes("chỉ") || unit.includes("chi")) {
-          // quantity is in chỉ -> convert to lượng
-          return (qty / 10) * marketPrices.gold;
-        }
-        // assume quantity is in lượng
-        return qty * marketPrices.gold;
-      }
-
-      return Number(inv.totalInvested);
-    }
-    if (inv.assetType === "silver" && inv.quantity) {
-      // Silver: map non-Phú Quý brands to the nearest unit (kg/lượng).
-      const unit = String(inv.unit ?? "");
-      const phuQuyKey = unit.toLowerCase().includes("kg") ? "Phú Quý 1kg" : "Phú Quý 1 lượng";
-      const price = brandPrices?.silver?.[phuQuyKey];
-      if (price != null && price > 0) return Number(inv.quantity) * price;
-
-      // Fallback for legacy rows: market.prices.silver is VNĐ/gram
-      const qty = Number(inv.quantity);
-      if (marketPrices?.silver && qty > 0) {
-        const u = unit.toLowerCase();
-        const grams =
-          u.includes("kg") ? qty * 1000 :
-          u.includes("lượng") ? qty * 37.5 :
-          qty; // assume gram
-        return grams * marketPrices.silver;
-      }
-
-      return Number(inv.totalInvested);
-    }
-    // Savings / Lending: calculate accrued interest
-    if (inv.assetType === "savings" || inv.assetType === "lending") {
-      const meta = (inv.metadata ?? {}) as Record<string, unknown>;
-      const ratePct = Number(meta.rate_pct ?? 0);
-      if (ratePct > 0) {
-        const principal = Number(inv.totalInvested);
-        const daysElapsed = Math.max(0, Math.floor(
-          (Date.now() - new Date(inv.createdAt).getTime()) / (1000 * 60 * 60 * 24)
-        ));
-        const accruedInterest = Math.round(principal * (ratePct / 100) * (daysElapsed / 365));
-        return principal + accruedInterest;
-      }
-    }
-    return Number(inv.totalInvested);
-  }, [inv, brandPrices]);
-
-  const invested = Number(inv.totalInvested);
-  const pnl = currentValue - invested;
-  const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
-  const isProfit = pnl >= 0;
-  const typeLabel: string = ASSET_TYPE_LABELS[inv.assetType] ?? inv.assetType;
-  const typeIcon: string = ASSET_TYPE_ICONS[inv.assetType] ?? "💰";
-
-  const statusColors: Record<string, string> = {
-    holding: "bg-blue-50 text-blue-600 border-blue-200",
-    sold: "bg-gray-50 text-gray-600 border-gray-200",
-    matured: "bg-emerald-50 text-emerald-600 border-emerald-200",
-  };
-  const statusLabels: Record<string, string> = {
-    holding: "Đang giữ",
-    sold: "Đã bán",
-    matured: "Đáo hạn",
-  };
-
-  const metaEntries = inv.metadata && typeof inv.metadata === "object"
-    ? Object.entries(inv.metadata as Record<string, string>)
-    : [];
-
-  const metaLabels: Record<string, string> = {
-    rate_pct: "Lãi suất (%/năm)",
-    term_value: "Số kỳ hạn",
-    term_unit: "Đơn vị kỳ hạn",
-    due_date: "Ngày đáo hạn",
-  };
-
-  return (
-    <Card className="overflow-hidden hover:shadow-sm transition-all">
-      <CardContent className="p-4">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-muted flex items-center justify-center text-xl shrink-0">
-              {typeIcon}
-            </div>
-            <div>
-              <p className="font-medium text-sm">{inv.name}</p>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <Badge variant="outline" className="text-xs px-1.5 py-0 h-4">{typeLabel}</Badge>
-                {inv.status && (
-                  <span className={`text-xs px-1.5 py-0.5 rounded border ${statusColors[inv.status] ?? ""}`}>
-                    {statusLabels[inv.status] ?? ""}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="text-right shrink-0">
-            <p className="text-base sm:text-sm font-bold num">{formatVND(currentValue)}</p>
-            <div className={`flex items-center gap-0.5 justify-end text-xs ${isProfit ? "text-emerald-600" : "text-red-500"}`}>
-              {isProfit ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-              <span className="num">{isProfit ? "+" : ""}{formatVND(pnl)}</span>
-              <span>({pnlPct.toFixed(1)}%)</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-muted-foreground">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>Đầu tư: <span className="num font-medium text-foreground">{formatVND(invested)}</span></span>
-            {inv.quantity && (
-              <span>SL: <span className="font-medium text-foreground">{inv.quantity} {String(inv.unit ?? ASSET_UNITS[inv.assetType] ?? "")}</span></span>
-            )}
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-destructive hover:text-destructive"
-            onClick={() => onDelete(inv.id)}
-          >
-            <Trash2 className="h-3 w-3" />
-          </Button>
-        </div>
-
-        {metaEntries.length > 0 && (
-          <div className="mt-2 pt-2 border-t">
-            <button
-              onClick={() => setExpanded(!expanded)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              Chi tiết
-            </button>
-            {expanded && (
-              <div className="mt-2 space-y-1 text-xs">
-                {metaEntries.map(([k, v]) => (
-                  <div key={k} className="flex justify-between">
-                    <span className="text-muted-foreground">{metaLabels[k] ?? k.replace(/_/g, " ")}</span>
-                    <span className="font-medium">{String(v)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function Investments() {
-  const [historyTab, setHistoryTab] = useState<"gold" | "silver" | "savings" | "lending">("gold");
+  const [historyTab, setHistoryTab] = useState<"gold" | "silver" | "savings" | "realestate">("gold");
   const [editId, setEditId] = useState<number | null>(null);
   const editDeleteModeRef = useRef<"edit" | "delete" | null>(null);
   const pendingCreateToDeleteIdRef = useRef<number | null>(null);
@@ -415,55 +219,29 @@ export default function Investments() {
     gold: false,
     silver: false,
   });
-  const [marketInputsOpen, setMarketInputsOpen] = useState<Record<"gold" | "silver", boolean>>({
-    gold: false,
-    silver: false,
-  });
 
   const utils = trpc.useUtils();
   const { data: investments = [], isLoading } = trpc.investment.list.useQuery();
-  const { data: brandPrices } = trpc.market.brandPrices.useQuery();
   const { data: marketPrices } = trpc.market.prices.useQuery();
 
-  const updateBrandPricesMutation = trpc.market.updateBrandPrices.useMutation({
-    onSuccess: () => {
-      utils.market.brandPrices.invalidate();
-      toast.success("Đã cập nhật giá thị trường theo thương hiệu");
+  const refreshN8nMutation = trpc.market.refreshFromN8n.useMutation({
+    onSuccess: async () => {
+      toast.success("Đã gửi yêu cầu cập nhật giá từ n8n");
+      await utils.market.prices.invalidate();
+      await utils.market.prices.refetch();
+      window.setTimeout(() => {
+        void utils.market.prices.invalidate();
+        void utils.market.prices.refetch();
+      }, 4000);
     },
     onError: (e) => toast.error(e.message),
   });
 
-  // Draft inputs shown in Gold/Silver tabs only
-  const [goldSJC, setGoldSJC] = useState("");
-  const [goldPNJ, setGoldPNJ] = useState("");
-  const [goldDoji, setGoldDoji] = useState("");
-  const [goldMiHong, setGoldMiHong] = useState("");
-
-  const [silverPhuQuyKg, setSilverPhuQuyKg] = useState("");
-  const [silverPhuQuyLuong, setSilverPhuQuyLuong] = useState("");
-
-  useEffect(() => {
-    if (!brandPrices) return;
-    const g = (brandPrices as any).gold ?? {};
-    const s = (brandPrices as any).silver ?? {};
-
-    const format2 = (v: unknown) =>
-      typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : typeof v === "string" && v ? v : "";
-
-    setGoldSJC(format2(g["SJC"]));
-    setGoldPNJ(format2(g["PNJ"]));
-    setGoldDoji(format2(g["Doji"]));
-    setGoldMiHong(format2(g["Mi Hồng"]));
-
-    setSilverPhuQuyKg(format2(s["Phú Quý 1kg"]));
-    setSilverPhuQuyLuong(format2(s["Phú Quý 1 lượng"]));
-  }, [brandPrices]);
-
-  function openCreateAssetType(assetType: "savings" | "lending") {
+  function openCreateSavings() {
     setEditId(null);
     pendingCreateToDeleteIdRef.current = null;
     editDeleteModeRef.current = null;
-    setForm({ ...getDefaultForm(), assetType, unit: ASSET_UNITS[assetType] });
+    setForm({ ...getDefaultForm(), assetType: "savings", unit: ASSET_UNITS.savings });
     setDialogOpen(true);
   }
 
@@ -505,7 +283,7 @@ export default function Investments() {
         return;
       }
 
-      toast.success("Đã thêm khoản đầu tư");
+      toast.success("Đã thêm tài sản");
       setDialogOpen(false);
       setForm(getDefaultForm());
     },
@@ -516,52 +294,18 @@ export default function Investments() {
     onSuccess: () => {
       utils.investment.list.invalidate();
       const mode = editDeleteModeRef.current;
-      if (mode === "edit") toast.success("Đã cập nhật lệnh đầu tư");
-      else toast.success("Đã xóa khoản đầu tư");
+      if (mode === "edit") toast.success("Đã cập nhật tài sản");
+      else toast.success("Đã xóa tài sản");
       editDeleteModeRef.current = null;
     },
     onError: (e) => toast.error(e.message),
   });
 
   const totalInvested = investments.reduce((s, inv) => s + Number(inv.totalInvested), 0);
-  const totalCurrentValue = investments.reduce((sum, inv) => {
-    let cv = Number(inv.totalInvested);
-    if (inv.assetType === "gold" && inv.quantity) {
-      const meta = (inv.metadata ?? {}) as Record<string, unknown>;
-      const brand = String(meta.brand ?? "");
-      const price = (brandPrices as any)?.gold?.[brand];
-      if (typeof price === "number" && price > 0) cv = Number(inv.quantity) * price;
-      else if (marketPrices?.gold && Number(inv.quantity) > 0) {
-        const unit = String(inv.unit ?? "").toLowerCase();
-        const qty = Number(inv.quantity);
-        cv = (unit.includes("ch") || unit.includes("chỉ") || unit.includes("chi")) ? (qty / 10) * marketPrices.gold : qty * marketPrices.gold;
-      }
-    }
-    if (inv.assetType === "silver" && inv.quantity) {
-      const unit = String(inv.unit ?? "");
-      const phuQuyKey = unit.toLowerCase().includes("kg") ? "Phú Quý 1kg" : "Phú Quý 1 lượng";
-      const price = (brandPrices as any)?.silver?.[phuQuyKey];
-      if (typeof price === "number" && price > 0) cv = Number(inv.quantity) * price;
-      else if (marketPrices?.silver && Number(inv.quantity) > 0) {
-        const qty = Number(inv.quantity);
-        const u = unit.toLowerCase();
-        const grams = u.includes("kg") ? qty * 1000 : u.includes("lượng") ? qty * 37.5 : qty;
-        cv = grams * marketPrices.silver;
-      }
-    }
-    if (inv.assetType === "savings" || inv.assetType === "lending") {
-      const meta = (inv.metadata ?? {}) as Record<string, unknown>;
-      const ratePct = Number(meta.rate_pct ?? 0);
-      if (ratePct > 0) {
-        const principal = Number(inv.totalInvested);
-        const daysElapsed = Math.max(0, Math.floor(
-          (Date.now() - new Date(inv.createdAt).getTime()) / (1000 * 60 * 60 * 24)
-        ));
-        cv = principal + Math.round(principal * (ratePct / 100) * (daysElapsed / 365));
-      }
-    }
-    return sum + cv;
-  }, 0);
+  const totalCurrentValue = investments.reduce(
+    (sum, inv) => sum + computeInvestmentCurrentValue(inv, marketPrices ?? undefined),
+    0
+  );
   const totalPnl = totalCurrentValue - totalInvested;
   const totalPnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
 
@@ -574,10 +318,6 @@ export default function Investments() {
   const savingsInvestments = investments
     .filter((inv) => inv.assetType === "savings")
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const lendingInvestments = investments
-    .filter((inv) => inv.assetType === "lending")
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
   const quantityNum = parseFloat(form.quantity) || 0;
   const unitPriceNum = parseDecimalInput(form.unitPrice) || 0;
   const totalCalculated = quantityNum * unitPriceNum;
@@ -589,48 +329,7 @@ export default function Investments() {
       : "lượng";
 
   function getCurrentValue(inv: Investment): number {
-    if (inv.assetType === "gold" && inv.quantity) {
-      const meta = (inv.metadata ?? {}) as Record<string, unknown>;
-      const brand = String(meta.brand ?? "");
-      const price = (brandPrices as any)?.gold?.[brand];
-      if (typeof price === "number" && price > 0) return Number(inv.quantity) * price;
-
-      // Fallback for legacy rows
-      if (marketPrices?.gold) {
-        const unit = String(inv.unit ?? "").toLowerCase();
-        const qty = Number(inv.quantity);
-        if (qty > 0) {
-          return unit.includes("ch") || unit.includes("chỉ") || unit.includes("chi") ? (qty / 10) * marketPrices.gold : qty * marketPrices.gold;
-        }
-      }
-      return Number(inv.totalInvested);
-    }
-    if (inv.assetType === "silver" && inv.quantity) {
-      const unit = String(inv.unit ?? "");
-      const phuQuyKey = unit.toLowerCase().includes("kg") ? "Phú Quý 1kg" : "Phú Quý 1 lượng";
-      const price = (brandPrices as any)?.silver?.[phuQuyKey];
-      if (typeof price === "number" && price > 0) return Number(inv.quantity) * price;
-
-      if (marketPrices?.silver) {
-        const qty = Number(inv.quantity);
-        if (qty > 0) {
-          const u = unit.toLowerCase();
-          const grams = u.includes("kg") ? qty * 1000 : u.includes("lượng") ? qty * 37.5 : qty;
-          return grams * marketPrices.silver;
-        }
-      }
-      return Number(inv.totalInvested);
-    }
-    if (inv.assetType === "savings" || inv.assetType === "lending") {
-      const meta = (inv.metadata ?? {}) as Record<string, unknown>;
-      const ratePct = Number(meta.rate_pct ?? 0);
-      if (ratePct > 0) {
-        const principal = Number(inv.totalInvested);
-        const daysElapsed = Math.max(0, Math.floor((Date.now() - new Date(inv.createdAt).getTime()) / (1000 * 60 * 60 * 24)));
-        return principal + Math.round(principal * (ratePct / 100) * (daysElapsed / 365));
-      }
-    }
-    return Number(inv.totalInvested);
+    return computeInvestmentCurrentValue(inv, marketPrices ?? undefined);
   }
 
   function getAssetSummary(assetType: "gold" | "silver") {
@@ -697,22 +396,10 @@ export default function Investments() {
       return;
     }
 
-    // lending
-    const invTermUnitLabel = String(meta.term_unit ?? "");
-    const termUnitKey = (Object.keys(TERM_UNIT_LABELS) as TermUnit[]).find((k) => TERM_UNIT_LABELS[k] === invTermUnitLabel) ?? "month";
-    const investedNum = Number(inv.totalInvested);
-    setForm({
-      ...getDefaultForm(),
-      assetType: "lending",
-      name: inv.name,
-      totalInvested: Number.isFinite(investedNum) ? investedNum.toLocaleString("vi-VN") : String(inv.totalInvested ?? ""),
-      lendingRatePct: String(meta.rate_pct ?? ""),
-      lendingTermValue: meta.term_value != null ? String(meta.term_value) : "",
-      lendingTermUnit: termUnitKey,
-      dueDate: String(meta.due_date ?? ""),
-      unit: inv.unit ?? ASSET_UNITS.lending,
-    });
-    setDialogOpen(true);
+    if (inv.assetType === "lending") {
+      toast.info("Quản lý cho vay trong mục Cài đặt.");
+      return;
+    }
   }
 
   function GoldSilverSummary({
@@ -808,12 +495,10 @@ export default function Investments() {
     assetType: "gold" | "silver";
     list: Investment[];
   }) {
-    const brandUpdatedAt = (brandPrices as any)?.updatedAtByAsset?.[assetType];
-    const fallbackUpdatedAt =
+    const priceUpdatedAt =
       assetType === "gold"
         ? (marketPrices as any)?.goldUpdatedAt ?? marketPrices?.updatedAt
         : (marketPrices as any)?.silverUpdatedAt ?? marketPrices?.updatedAt;
-    const priceUpdatedAt = brandUpdatedAt ?? fallbackUpdatedAt ?? null;
 
     if (list.length === 0) {
       return <p className="text-xs text-muted-foreground">Chưa có lệnh {assetType === "gold" ? "vàng" : "bạc"}.</p>;
@@ -879,7 +564,7 @@ export default function Investments() {
                       size="icon"
                       className="h-8 w-8 text-destructive hover:text-destructive"
                       onClick={() => {
-                        if (!confirm("Xóa lệnh đầu tư này?")) return;
+                        if (!confirm("Xóa tài sản này?")) return;
                         editDeleteModeRef.current = "delete";
                         deleteMutation.mutate({ id: inv.id });
                       }}
@@ -934,32 +619,6 @@ export default function Investments() {
     );
   }
 
-  function GoldSilverLegacyList({
-    assetType,
-    list,
-  }: {
-    assetType: "gold" | "silver";
-    list: Investment[];
-  }) {
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {list.map((inv) => (
-          <InvestmentCard
-            key={inv.id}
-            inv={inv}
-            brandPrices={brandPrices ?? null}
-            marketPrices={marketPrices ?? null}
-            onDelete={(id) => {
-              if (!confirm("Xóa khoản đầu tư này?")) return;
-              editDeleteModeRef.current = "delete";
-              deleteMutation.mutate({ id });
-            }}
-          />
-        ))}
-      </div>
-    );
-  }
-
   function handleSubmit() {
     if (form.assetType === "gold" || form.assetType === "silver") {
       if (!form.brand) return toast.error("Vui lòng chọn thương hiệu");
@@ -988,9 +647,9 @@ export default function Investments() {
       return;
     }
 
-    if (!form.name.trim()) return toast.error("Tên khoản đầu tư không được để trống");
+    if (!form.name.trim()) return toast.error("Tên tài sản không được để trống");
     const investedNum = parseFormattedNumber(form.totalInvested);
-    if (investedNum <= 0) return toast.error("Số tiền đầu tư không hợp lệ");
+    if (investedNum <= 0) return toast.error("Số tiền không hợp lệ");
 
     const metadata: Record<string, unknown> = {};
     if (form.assetType === "savings") {
@@ -999,14 +658,6 @@ export default function Investments() {
         metadata.term_value = parseFloat(form.termValue);
         metadata.term_unit = TERM_UNIT_LABELS[form.termUnit];
       }
-    }
-    if (form.assetType === "lending") {
-      if (form.lendingRatePct) metadata.rate_pct = parseFloat(form.lendingRatePct);
-      if (form.lendingTermValue) {
-        metadata.term_value = parseFloat(form.lendingTermValue);
-        metadata.term_unit = TERM_UNIT_LABELS[form.lendingTermUnit];
-      }
-      if (form.dueDate) metadata.due_date = form.dueDate;
     }
 
     createMutation.mutate({
@@ -1024,8 +675,8 @@ export default function Investments() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Danh mục đầu tư</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{investments.length} khoản đầu tư · giao diện {INVESTMENT_VIEW_VERSION}</p>
+          <h1 className="text-2xl font-bold tracking-tight">Quản lý tài sản</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{investments.length} tài sản · giao diện {INVESTMENT_VIEW_VERSION}</p>
         </div>
         <Button
           size="sm"
@@ -1039,7 +690,7 @@ export default function Investments() {
           }}
         >
           <Plus className="h-4 w-4 mr-1.5" />
-          Thêm khoản đầu tư
+          Thêm tài sản
         </Button>
       </div>
 
@@ -1052,7 +703,7 @@ export default function Investments() {
       >
         <div className="flex items-center gap-2 text-sm font-medium">
           {totalPnl >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-          <span>{totalPnl >= 0 ? "Danh mục đang có lãi" : "Danh mục đang tạm lỗ"}</span>
+          <span>{totalPnl >= 0 ? "Tài sản đang có lãi" : "Tài sản đang tạm lỗ"}</span>
         </div>
       </div>
 
@@ -1060,7 +711,7 @@ export default function Investments() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4">
         <Card className="border-0 bg-muted/40">
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Tổng đầu tư</p>
+            <p className="text-xs text-muted-foreground">Tổng giá trị gốc</p>
             <p className="text-lg font-bold num mt-1">{formatVND(totalInvested)}</p>
           </CardContent>
         </Card>
@@ -1083,219 +734,82 @@ export default function Investments() {
       </div>
 
       {/* Lịch sử giao dịch */}
-      <div className="space-y-3">
-        <h2 className="text-sm font-semibold">Lịch sử giao dịch</h2>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <h2 className="text-sm font-semibold">Lịch sử giao dịch</h2>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 text-xs"
+            disabled={refreshN8nMutation.isPending}
+            onClick={() => refreshN8nMutation.mutate()}
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", refreshN8nMutation.isPending && "animate-spin")} />
+            Cập nhật giá
+          </Button>
+        </div>
         <Tabs
           value={historyTab}
           onValueChange={(v) =>
-            setHistoryTab(v as "gold" | "silver" | "savings" | "lending")
+            setHistoryTab(v as "gold" | "silver" | "savings" | "realestate")
           }
         >
           <TabsList className="w-full justify-between">
             <TabsTrigger value="gold" className="flex-1">🥇 Vàng</TabsTrigger>
             <TabsTrigger value="silver" className="flex-1">🥈 Bạc</TabsTrigger>
             <TabsTrigger value="savings" className="flex-1">🏦 Tiết kiệm</TabsTrigger>
-            <TabsTrigger value="lending" className="flex-1">💳 Cho vay</TabsTrigger>
+            <TabsTrigger value="realestate" className="flex-1">🏠✨ Bất động sản</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="gold" className="space-y-3">
-            <Card className="border bg-muted/20 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-semibold">Giá trị thị trường (Vàng)</h3>
-                  <p className="text-[11px] text-muted-foreground">Đơn vị: VNĐ/chỉ (nhập giá có thập phân)</p>
+          <TabsContent value="gold" className="space-y-2 pt-1">
+            <Card className="border bg-amber-50/40 py-2 px-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-semibold leading-tight">Giá thị trường vàng SJC</p>
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    {marketPrices?.goldUpdatedAt
+                      ? new Date(marketPrices.goldUpdatedAt as string).toLocaleString("vi-VN")
+                      : "—"}
+                    {(marketPrices as { goldSourceLabel?: string | null })?.goldSourceLabel
+                      ? ` · ${(marketPrices as { goldSourceLabel?: string | null }).goldSourceLabel}`
+                      : ""}
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[11px]">
-                    Theo thương hiệu
-                  </Badge>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() =>
-                      setMarketInputsOpen((prev) => ({
-                        ...prev,
-                        gold: !prev.gold,
-                      }))
-                    }
-                    aria-label={marketInputsOpen.gold ? "Thu gọn" : "Mở rộng"}
-                  >
-                    {marketInputsOpen.gold ? (
-                      <ChevronUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
+                <p className="text-base font-bold num tabular-nums shrink-0 text-right leading-tight">
+                  {marketPrices?.gold ? formatVND(marketPrices.gold) : "—"}
+                  <span className="text-[10px] font-normal text-muted-foreground not-italic"> /lượng</span>
+                </p>
               </div>
-
-              {marketInputsOpen.gold && (
-                <>
-                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">SJC</Label>
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        value={goldSJC}
-                        onChange={(e) => setGoldSJC(e.target.value)}
-                        placeholder="VD: 18000000.00"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">PNJ</Label>
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        value={goldPNJ}
-                        onChange={(e) => setGoldPNJ(e.target.value)}
-                        placeholder="VD: 18000000.00"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">Doji</Label>
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        value={goldDoji}
-                        onChange={(e) => setGoldDoji(e.target.value)}
-                        placeholder="VD: 18000000.00"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">Mi Hồng</Label>
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        value={goldMiHong}
-                        onChange={(e) => setGoldMiHong(e.target.value)}
-                        placeholder="VD: 18000000.00"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex justify-end">
-                    <Button
-                      size="sm"
-                      disabled={updateBrandPricesMutation.isPending}
-                      onClick={() => {
-                        const payloadGold: Record<string, number> = {};
-                        const g1 = parseDecimalInput(goldSJC);
-                        const g2 = parseDecimalInput(goldPNJ);
-                        const g3 = parseDecimalInput(goldDoji);
-                        const g4 = parseDecimalInput(goldMiHong);
-                        if (Number.isFinite(g1) && g1 > 0) payloadGold["SJC"] = g1;
-                        if (Number.isFinite(g2) && g2 > 0) payloadGold["PNJ"] = g2;
-                        if (Number.isFinite(g3) && g3 > 0) payloadGold["Doji"] = g3;
-                        if (Number.isFinite(g4) && g4 > 0) payloadGold["Mi Hồng"] = g4;
-                        if (Object.keys(payloadGold).length === 0) return toast.error("Vui lòng nhập ít nhất 1 giá vàng");
-                        updateBrandPricesMutation.mutate({ gold: payloadGold });
-                      }}
-                    >
-                      Lưu giá vàng
-                    </Button>
-                  </div>
-                </>
-              )}
             </Card>
 
-            {INVESTMENT_VIEW_VERSION === "v2.1" ? (
-              <>
-                <GoldSilverSummary assetType="gold" summary={getAssetSummary("gold")} />
-                <GoldSilverHistory assetType="gold" list={goldInvestments} />
-              </>
-            ) : (
-              <GoldSilverLegacyList assetType="gold" list={goldInvestments} />
-            )}
+            <GoldSilverSummary assetType="gold" summary={getAssetSummary("gold")} />
+            <GoldSilverHistory assetType="gold" list={goldInvestments} />
           </TabsContent>
 
-          <TabsContent value="silver" className="space-y-3">
-            <Card className="border bg-muted/20 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-semibold">Giá trị thị trường (Bạc)</h3>
-                  <p className="text-[11px] text-muted-foreground">Đơn vị: VNĐ/kg và VNĐ/lượng</p>
+          <TabsContent value="silver" className="space-y-2 pt-1">
+            <Card className="border bg-slate-50/60 py-2 px-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-semibold leading-tight">Giá thị trường bạc</p>
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    {marketPrices?.silverUpdatedAt
+                      ? new Date(marketPrices.silverUpdatedAt as string).toLocaleString("vi-VN")
+                      : "—"}
+                    {(marketPrices as { silverSourceLabel?: string | null })?.silverSourceLabel
+                      ? ` · ${(marketPrices as { silverSourceLabel?: string | null }).silverSourceLabel}`
+                      : ""}
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[11px]">
-                    Theo thương hiệu
-                  </Badge>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() =>
-                      setMarketInputsOpen((prev) => ({
-                        ...prev,
-                        silver: !prev.silver,
-                      }))
-                    }
-                    aria-label={marketInputsOpen.silver ? "Thu gọn" : "Mở rộng"}
-                  >
-                    {marketInputsOpen.silver ? (
-                      <ChevronUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
+                <p className="text-base font-bold num tabular-nums shrink-0 text-right leading-tight">
+                  {marketPrices?.silver ? formatVND(marketPrices.silver) : "—"}
+                  <span className="text-[10px] font-normal text-muted-foreground not-italic"> /gram</span>
+                </p>
               </div>
-
-              {marketInputsOpen.silver && (
-                <>
-                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">Phú Quý 1kg</Label>
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        value={silverPhuQuyKg}
-                        onChange={(e) => setSilverPhuQuyKg(e.target.value)}
-                        placeholder="VD: 25000000.00"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">Phú Quý 1 lượng</Label>
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        value={silverPhuQuyLuong}
-                        onChange={(e) => setSilverPhuQuyLuong(e.target.value)}
-                        placeholder="VD: 2500000.00"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex justify-end">
-                    <Button
-                      size="sm"
-                      disabled={updateBrandPricesMutation.isPending}
-                      onClick={() => {
-                        const payloadSilver: Record<string, number> = {};
-                        const s1 = parseDecimalInput(silverPhuQuyKg);
-                        const s2 = parseDecimalInput(silverPhuQuyLuong);
-                        if (Number.isFinite(s1) && s1 > 0) payloadSilver["Phú Quý 1kg"] = s1;
-                        if (Number.isFinite(s2) && s2 > 0) payloadSilver["Phú Quý 1 lượng"] = s2;
-                        if (Object.keys(payloadSilver).length === 0) return toast.error("Vui lòng nhập ít nhất 1 giá bạc");
-                        updateBrandPricesMutation.mutate({ silver: payloadSilver });
-                      }}
-                    >
-                      Lưu giá bạc
-                    </Button>
-                  </div>
-                </>
-              )}
             </Card>
 
-            {INVESTMENT_VIEW_VERSION === "v2.1" ? (
-              <>
-                <GoldSilverSummary assetType="silver" summary={getAssetSummary("silver")} />
-                <GoldSilverHistory assetType="silver" list={silverInvestments} />
-              </>
-            ) : (
-              <GoldSilverLegacyList assetType="silver" list={silverInvestments} />
-            )}
+            <GoldSilverSummary assetType="silver" summary={getAssetSummary("silver")} />
+            <GoldSilverHistory assetType="silver" list={silverInvestments} />
           </TabsContent>
 
           <TabsContent value="savings" className="space-y-3">
@@ -1305,7 +819,7 @@ export default function Investments() {
                 size="sm"
                 variant="outline"
                 className="h-8"
-                onClick={() => openCreateAssetType("savings")}
+                onClick={() => openCreateSavings()}
               >
                 <Plus className="h-4 w-4 mr-1.5" />
                 Tạo mới
@@ -1319,11 +833,10 @@ export default function Investments() {
                   <InvestmentCard
                     key={inv.id}
                     inv={inv as Investment}
-                    brandPrices={brandPrices ?? null}
                     marketPrices={marketPrices ?? null}
                     onDelete={(id) => {
                       editDeleteModeRef.current = "delete";
-                      if (confirm("Xóa khoản đầu tư này?")) deleteMutation.mutate({ id });
+                      if (confirm("Xóa tài sản này?")) deleteMutation.mutate({ id });
                     }}
                   />
                 ))}
@@ -1331,37 +844,20 @@ export default function Investments() {
             )}
           </TabsContent>
 
-          <TabsContent value="lending" className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-xs font-semibold text-muted-foreground">Các lệnh cho vay</h3>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8"
-                onClick={() => openCreateAssetType("lending")}
-              >
-                <Plus className="h-4 w-4 mr-1.5" />
-                Tạo mới
-              </Button>
-            </div>
-            {lendingInvestments.length === 0 ? (
-              <p className="text-xs text-muted-foreground">Chưa có lệnh cho vay.</p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {lendingInvestments.map((inv) => (
-                  <InvestmentCard
-                    key={inv.id}
-                    inv={inv as Investment}
-                    brandPrices={brandPrices ?? null}
-                    marketPrices={marketPrices ?? null}
-                    onDelete={(id) => {
-                      editDeleteModeRef.current = "delete";
-                      if (confirm("Xóa khoản đầu tư này?")) deleteMutation.mutate({ id });
-                    }}
-                  />
-                ))}
-              </div>
-            )}
+          <TabsContent value="realestate" className="space-y-3">
+            <Card className="border-dashed bg-muted/20">
+              <CardContent className="flex flex-col items-center justify-center gap-3 py-10 px-4 text-center">
+                <div className="text-4xl leading-none" aria-hidden>
+                  🏠🌴✨
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold">Bất động sản</p>
+                  <p className="text-xs text-muted-foreground max-w-sm">
+                    Tính năng sắp ra mắt — theo dõi nhà đất, cho thuê và giá trị tài sản ngay trong FinTrack.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>
@@ -1380,18 +876,19 @@ export default function Investments() {
       >
         <DrawerContent>
           <DrawerHeader className="text-left">
-            <DrawerTitle>{editId ? "Sửa lệnh đầu tư" : "Tạo mới khoản đầu tư"}</DrawerTitle>
+            <DrawerTitle>{editId ? "Sửa tài sản" : "Thêm tài sản"}</DrawerTitle>
             <DrawerDescription>
-              {editId ? "Chỉnh sửa thông tin lệnh và lưu lại." : "Nhập thông tin vàng, bạc, tiết kiệm hoặc cho vay để lưu danh mục."}
+              {editId ? "Chỉnh sửa thông tin và lưu lại." : "Nhập thông tin vàng, bạc hoặc tiết kiệm."}
             </DrawerDescription>
           </DrawerHeader>
           <div className="px-4 pb-2 max-h-[65vh] overflow-y-auto space-y-4">
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">1. Phân loại tài sản</Label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {(["gold", "silver", "savings", "lending"] as const).map((type) => (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {(["gold", "silver", "savings"] as const).map((type) => (
                   <button
                     key={type}
+                    type="button"
                     onClick={() => setForm({
                       ...form,
                       assetType: type,
@@ -1489,13 +986,9 @@ export default function Investments() {
             ) : (
               <>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-medium">Tên khoản đầu tư *</Label>
+                  <Label className="text-xs font-medium">Tên tài sản *</Label>
                   <Input
-                    placeholder={
-                      form.assetType === "savings"
-                        ? "VD: Tiết kiệm Vietcombank 6 tháng"
-                        : "VD: Cho vay ngắn hạn"
-                    }
+                    placeholder="VD: Tiết kiệm Vietcombank 6 tháng"
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
                   />
@@ -1546,54 +1039,6 @@ export default function Investments() {
                           </SelectContent>
                         </Select>
                       </div>
-                    </div>
-                  </div>
-                )}
-
-                {form.assetType === "lending" && (
-                  <div className="space-y-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">Lãi suất (%/năm)</Label>
-                      <Input
-                        type="number"
-                        placeholder="VD: 12"
-                        value={form.lendingRatePct}
-                        onChange={(e) => setForm({ ...form, lendingRatePct: e.target.value })}
-                        step="0.1"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1.5">
-                        <Label className="text-xs font-medium">Số kỳ hạn</Label>
-                        <Input
-                          type="number"
-                          placeholder="VD: 3"
-                          value={form.lendingTermValue}
-                          onChange={(e) => setForm({ ...form, lendingTermValue: e.target.value })}
-                          min="1"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-xs font-medium">Đơn vị</Label>
-                        <Select value={form.lendingTermUnit} onValueChange={(v) => setForm({ ...form, lendingTermUnit: v as TermUnit })}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="week">Tuần</SelectItem>
-                            <SelectItem value="month">Tháng</SelectItem>
-                            <SelectItem value="year">Năm</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium">Ngày đáo hạn (tùy chọn)</Label>
-                      <Input
-                        type="date"
-                        value={form.dueDate}
-                        onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-                      />
                     </div>
                   </div>
                 )}

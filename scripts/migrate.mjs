@@ -69,8 +69,8 @@ tables.forEach(t => console.log(`   • ${t}`));
 
 const expected = [
   'ai_conversations', 'ai_prompt_configs', 'budget_limits',
-  'categories', 'investment_transactions', 'investments',
-  'market_brand_prices', 'price_snapshots', 'transactions', 'users',
+  'categories', 'gold_n8n_feed', 'investment_transactions', 'investments',
+  'silver_n8n_feed', 'transactions', 'users',
 ];
 const missing = expected.filter(t => !tables.includes(t));
 if (missing.length === 0) {

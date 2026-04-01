@@ -65,7 +65,16 @@ import { DefaultChatTransport } from "ai";
 // import them directly from "ai" package in your consuming code.
 // ============================================================================
 
-import type { UIMessage, UIMessagePart, UIToolInvocation } from "ai";
+import type {
+  UIMessage,
+  UIMessagePart,
+  UIToolInvocation,
+  UIDataTypes,
+  UITools,
+} from "ai";
+
+/** Default UI message part shape for this app (AI SDK v6 requires two type parameters). */
+type AppUIMessagePart = UIMessagePart<UIDataTypes, UITools>;
 
 /**
  * Tool invocation state derived from AI SDK's UIToolInvocation type.
@@ -104,7 +113,7 @@ export function isToolComplete(state: ToolInvocationState): boolean {
  */
 export interface ToolPartRendererProps {
   /** The tool part from the message - type is `tool-${toolName}` */
-  part: UIMessagePart & { type: `tool-${string}` };
+  part: AppUIMessagePart & { type: `tool-${string}` };
   /** Extracted tool name for convenience */
   toolName: string;
   /** Current state of the tool invocation */
@@ -158,6 +167,9 @@ export interface AIChatBoxProps {
 
   /** Suggested prompts shown in empty state */
   suggestedPrompts?: string[];
+
+  /** Optional minimum height for the chat container (e.g. `"500px"`) */
+  height?: string;
 }
 
 // ============================================================================
@@ -245,7 +257,7 @@ function MessageBubble({
             }
             return (
               <div key={i} className="prose prose-sm dark:prose-invert max-w-none">
-                <Markdown mode={isStreaming ? "typewriter" : "static"} typewriterSpeed={50}>
+                <Markdown mode={isStreaming ? "streaming" : "static"} isAnimating={isStreaming}>
                   {part.text}
                 </Markdown>
               </div>
@@ -256,7 +268,7 @@ function MessageBubble({
           if (part.type.startsWith("tool-")) {
             const toolName = part.type.replace("tool-", "");
             // Cast to access tool-specific properties
-            const toolPart = part as UIMessagePart & {
+            const toolPart = part as AppUIMessagePart & {
               type: `tool-${string}`;
               toolCallId: string;
               state: ToolInvocationState;
@@ -333,6 +345,7 @@ export function AIChatBox({
   className,
   emptyStateMessage = "Start a conversation with AI",
   suggestedPrompts,
+  height,
 }: AIChatBoxProps) {
   const [input, setInput] = useState("");
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -435,7 +448,10 @@ export function AIChatBox({
   // Render
   // -------------------------------------------------------------------------
   return (
-    <div className={cn("flex flex-col flex-1 min-h-0", className)}>
+    <div
+      className={cn("flex flex-col flex-1 min-h-0", className)}
+      style={height ? { minHeight: height } : undefined}
+    >
       {/* Messages Area */}
       <div ref={scrollAreaRef} className="flex-1 overflow-hidden">
         <ScrollArea className="h-full">

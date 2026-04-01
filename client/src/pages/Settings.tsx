@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { LendingSettingsPanel } from "@/components/investments/LendingSettingsPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +50,8 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
+
+        <LendingSettingsPanel />
 
         <Card>
           <CardHeader>

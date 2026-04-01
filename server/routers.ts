@@ -14,8 +14,8 @@ import {
   getCategoriesByUser,
   getInvestmentTransactions,
   getInvestmentsByUser,
-  getLatestPrices,
-  getLatestBrandPrices,
+  getLatestGoldN8nFeed,
+  getLatestSilverN8nFeed,
   getMonthlyIncomeByCategoryMap,
   getMonthlyIncomeTotals,
   getMonthlySpendingByCategory,
@@ -24,8 +24,6 @@ import {
   recalcAllBudgetsForUser,
   recalcBudgetSpent,
   saveAiConversation,
-  savePriceSnapshot,
-  upsertMarketBrandPrices,
   seedDefaultPrompt,
   softDeleteCategory,
   softDeleteInvestment,
@@ -37,6 +35,13 @@ import {
   deleteBudgetLimitByCategoryId,
   upsertUser,
 } from "./db";
+
+import {
+  goldVndPerLuongFromPayload,
+  parseSourceTimeFromPayload,
+  silverVndPerGramFromPayload,
+} from "./marketN8nPayload";
+import { getN8nWebhookUrlsToCall, postN8nWebhook } from "./n8nMarketRefresh";
 import { ENV } from "./_core/env";
 
 // ─── AI Chat Helper ───────────────────────────────────────────────────────────
@@ -360,83 +365,56 @@ export const appRouter = router({
   // ─── Market Data ──────────────────────────────────────────────────────────
   market: router({
     prices: protectedProcedure.query(async () => {
-      const latest = await getLatestPrices();
-      const goldPrice = latest.find((p) => p.assetType === "gold");
-      const silverPrice = latest.find((p) => p.assetType === "silver");
+      const [goldRow, silverRow] = await Promise.all([getLatestGoldN8nFeed(), getLatestSilverN8nFeed()]);
+      const goldParsed = goldVndPerLuongFromPayload(goldRow?.payload ?? null);
+      const silverParsed = silverVndPerGramFromPayload(silverRow?.payload ?? null);
+      const gold = goldParsed != null && goldParsed > 0 ? goldParsed : 0;
+      const silver = silverParsed != null && silverParsed > 0 ? Math.round(silverParsed) : 0;
+      const goldSrc = goldRow ? parseSourceTimeFromPayload(goldRow.payload) : null;
+      const silverSrc = silverRow ? parseSourceTimeFromPayload(silverRow.payload) : null;
+      const goldUpdatedAt = goldRow?.ingestedAt ?? null;
+      const silverUpdatedAt = silverRow?.ingestedAt ?? null;
       return {
-        gold: Number(goldPrice?.sellPrice ?? 0),
-        silver: Number(silverPrice?.sellPrice ?? 0),
-        goldUpdatedAt: goldPrice?.fetchedAt ?? null,
-        silverUpdatedAt: silverPrice?.fetchedAt ?? null,
-        updatedAt: goldPrice?.fetchedAt ?? null,
+        gold,
+        silver,
+        goldUpdatedAt,
+        silverUpdatedAt,
+        updatedAt: goldUpdatedAt ?? silverUpdatedAt ?? null,
+        goldSourceLabel: goldSrc,
+        silverSourceLabel: silverSrc,
+        appDataVersion: "3.1.0" as const,
       };
     }),
 
-    // Brand-specific buy prices (per gold/silver brand)
-    // Stored in `market_brand_prices` table.
-    brandPrices: protectedProcedure.query(async () => {
-      return getLatestBrandPrices();
+    refreshFromN8n: protectedProcedure.mutation(async () => {
+      const urls = getN8nWebhookUrlsToCall();
+      if (urls.length === 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Chưa cấu hình N8N_SJC_WEBHOOK_URL trên server (.env). Thêm URL webhook Production của workflow n8n.",
+        });
+      }
+      for (const url of urls) {
+        try {
+          const { ok, status } = await postN8nWebhook(url);
+          if (!ok) {
+            throw new TRPCError({
+              code: "BAD_GATEWAY",
+              message: `n8n trả về HTTP ${status}. Kiểm tra workflow đang bật và URL webhook.`,
+            });
+          }
+        } catch (e) {
+          if (e instanceof TRPCError) throw e;
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new TRPCError({
+            code: "BAD_GATEWAY",
+            message: `Không gọi được n8n: ${msg}`,
+          });
+        }
+      }
+      return { ok: true as const, webhooksCalled: urls.length };
     }),
-
-    updatePrice: protectedProcedure
-      .input(
-        z.object({
-          goldPrice: z.number().positive().optional(),
-          silverPrice: z.number().positive().optional(),
-        })
-      )
-      .mutation(async ({ input }) => {
-        const now = new Date();
-        if (input.goldPrice) {
-          await savePriceSnapshot({
-            assetType: "gold",
-            source: "manual",
-            sellPrice: input.goldPrice.toString(),
-            buyPrice: input.goldPrice.toString(),
-            unit: "luong",
-            fetchedAt: now,
-          });
-        }
-        if (input.silverPrice) {
-          await savePriceSnapshot({
-            assetType: "silver",
-            source: "manual",
-            sellPrice: input.silverPrice.toString(),
-            buyPrice: input.silverPrice.toString(),
-            unit: "gram",
-            fetchedAt: now,
-          });
-        }
-        return { success: true };
-      }),
-
-    updateBrandPrices: protectedProcedure
-      .input(
-        z.object({
-          gold: z.record(z.string(), z.number().positive()).optional(),
-          silver: z.record(z.string(), z.number().positive()).optional(),
-        })
-      )
-      .mutation(async ({ input }) => {
-        const gold = input.gold ?? {};
-        const silver = input.silver ?? {};
-
-        const items: Array<{
-          assetType: "gold" | "silver";
-          brand: string;
-          buyPrice: number;
-        }> = [];
-
-        for (const [brand, price] of Object.entries(gold)) {
-          if (Number.isFinite(price) && price > 0) items.push({ assetType: "gold", brand, buyPrice: price });
-        }
-        for (const [brand, price] of Object.entries(silver)) {
-          if (Number.isFinite(price) && price > 0) items.push({ assetType: "silver", brand, buyPrice: price });
-        }
-
-        await upsertMarketBrandPrices(items as any);
-        return { success: true };
-      }),
 
     calcSavings: protectedProcedure
       .input(
@@ -552,7 +530,7 @@ export const appRouter = router({
             const matchWords = catMatch.split(/\s+/);
             found = pool.find((c) => {
               const catWords = c.name.toLowerCase().split(/\s+/);
-              return matchWords.some((w) => w.length > 2 && catWords.some((cw) => cw.includes(w) || w.includes(cw)));
+              return matchWords.some((w) => w.length > 2 && catWords.some((cw: string) => cw.includes(w) || w.includes(cw)));
             });
             return found ?? null;
           };

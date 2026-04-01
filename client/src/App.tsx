@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import Categories from "./pages/Categories";
 import Transactions from "./pages/Transactions";
 import AIChat from "./pages/AIChat";
+import AIChatDraftReview from "./pages/AIChatDraftReview";
 import Investments from "./pages/Investments";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
@@ -18,6 +19,7 @@ function Router() {
     <DashboardLayout>
       <Switch>
         <Route path="/" component={Dashboard} />
+        <Route path="/ai-chat/draft/:msgId" component={AIChatDraftReview} />
         <Route path="/ai-chat" component={AIChat} />
         <Route path="/categories" component={Categories} />
         <Route path="/transactions" component={Transactions} />

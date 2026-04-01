@@ -1388,6 +1388,8 @@ export default function ComponentsShowcase() {
                   </div>
                   <AIChatBox
                     api="/api/chat"
+                    chatId="component-showcase-demo"
+                    initialMessages={[]}
                     placeholder="Try sending a message..."
                     height="500px"
                     emptyStateMessage="How can I help you today?"

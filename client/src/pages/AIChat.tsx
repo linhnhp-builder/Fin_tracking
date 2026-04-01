@@ -1,27 +1,15 @@
 import { useState, useRef, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { formatVND, generateSessionId, todayString } from "@/lib/utils";
+import { generateSessionId } from "@/lib/utils";
+import {
+  storeAiChatDraft,
+  removeAiChatDraft,
+  type AiTransactionDraft,
+} from "@/lib/aiChatDraft";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "sonner";
-import { Send, Bot, User, CheckCircle, XCircle, Sparkles, MapPin, Loader2, AlertCircle } from "lucide-react";
-
-type CategoryOption = { id: number; name: string; icon: string | null; type: string };
-
-type TransactionDraft = {
-  amount: number;
-  amount_display: string;
-  type: "expense" | "income";
-  category_match: string;
-  categoryId?: number;
-  categoryName?: string;
-  categoryIcon?: string;
-  note: string;
-  location_name: string | null;
-  date: string;
-  allCategories?: CategoryOption[];
-};
+import { Send, Bot, User, CheckCircle, XCircle, Sparkles, MapPin, Loader2, ChevronRight } from "lucide-react";
 
 type Message = {
   id: string;
@@ -29,7 +17,7 @@ type Message = {
   content: string;
   timestamp: Date;
   intent?: string;
-  transaction?: TransactionDraft | null;
+  transaction?: AiTransactionDraft | null;
   confirmed?: boolean;
 };
 
@@ -38,8 +26,6 @@ const SUGGESTED_PROMPTS = [
   "Đi grab 50k",
   "Mua quần Uniqlo 500k",
   "Lương tháng 15 triệu",
-  "Tổng chi tiêu tháng này bao nhiêu?",
-  "So sánh chi tiêu tháng này với tháng trước",
 ];
 
 function TypingIndicator() {
@@ -52,41 +38,105 @@ function TypingIndicator() {
   );
 }
 
-function TransactionConfirmCard({
+function TransactionDraftCard({
   draft,
-  onConfirm,
-  onReject,
+  msgId,
   confirmed,
-  isPending,
+  onOpenDetail,
 }: {
-  draft: TransactionDraft;
-  onConfirm: (overrideCategoryId?: number) => void;
-  onReject: () => void;
+  draft: AiTransactionDraft;
+  msgId: string;
   confirmed?: boolean;
-  isPending?: boolean;
+  onOpenDetail: (msgId: string, draft: AiTransactionDraft) => void;
 }) {
   const isExpense = draft.type === "expense";
-  const hasCategory = !!draft.categoryId;
-  const [selectedCatId, setSelectedCatId] = useState<string>(
-    draft.categoryId ? String(draft.categoryId) : ""
-  );
-
   const displayIcon = draft.categoryIcon ?? "💰";
   const displayName = draft.categoryName ?? draft.category_match;
-  const displayDate = draft.date === "today" ? "Hôm nay" : draft.date;
+  const displayDate =
+    draft.date === "today"
+      ? "Hôm nay"
+      : draft.date?.match(/^\d{4}-\d{2}-\d{2}$/)
+        ? new Date(draft.date + "T12:00:00").toLocaleDateString("vi-VN")
+        : draft.date;
+
+  if (confirmed === true) {
+    return (
+      <div className="mt-2 w-full max-w-[min(100%,22rem)] overflow-hidden rounded-2xl border border-emerald-300/80 bg-emerald-50/60 shadow-sm transition-all">
+        <div className="p-4 space-y-4">
+          <div className="flex gap-3">
+            <div
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-muted/70 text-2xl leading-none"
+              aria-hidden
+            >
+              {displayIcon}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1.5 pt-0.5">
+              <p className="text-[15px] font-semibold leading-snug text-foreground">{displayName}</p>
+              {draft.note ? (
+                <p className="text-sm leading-relaxed text-muted-foreground">{draft.note}</p>
+              ) : null}
+            </div>
+          </div>
+          <div className="rounded-xl bg-muted/45 px-4 py-3.5 space-y-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Số tiền</span>
+              <p
+                className={`text-lg font-bold num tabular-nums tracking-tight whitespace-nowrap shrink-0 ${
+                  isExpense ? "text-red-600" : "text-emerald-600"
+                }`}
+              >
+                {isExpense ? "-" : "+"}
+                {draft.amount_display} ₫
+              </p>
+            </div>
+            <div className="flex items-center justify-between gap-2 border-t border-border/40 pt-2 text-xs text-muted-foreground">
+              <span>Ngày giao dịch</span>
+              <span className="font-medium text-foreground num">{displayDate}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-center gap-2 border-t border-emerald-200/80 bg-emerald-50/40 px-4 py-3.5 text-sm font-medium text-emerald-700">
+          <CheckCircle className="h-4 w-4 shrink-0" />
+          <span className="text-center leading-snug">Đã ghi vào giao dịch</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (confirmed === false) {
+    return (
+      <div className="mt-2 w-full max-w-[min(100%,22rem)] overflow-hidden rounded-2xl border border-red-200 bg-red-50/50 opacity-60 shadow-sm transition-all">
+        <div className="p-4 space-y-4">
+          <div className="flex gap-3">
+            <div
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-muted/70 text-2xl leading-none"
+              aria-hidden
+            >
+              {displayIcon}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1.5 pt-0.5">
+              <p className="text-[15px] font-semibold leading-snug text-foreground">{displayName}</p>
+              {draft.note ? (
+                <p className="text-sm leading-relaxed text-muted-foreground">{draft.note}</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-center gap-2 border-t border-red-200/80 bg-red-50/30 px-4 py-3.5 text-sm font-medium text-red-600">
+          <XCircle className="h-4 w-4 shrink-0" />
+          <span>Đã bỏ nháp</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={`mt-2 w-full max-w-[min(100%,22rem)] rounded-2xl border shadow-sm overflow-hidden transition-all ${
-        confirmed === true
-          ? "border-emerald-300/80 bg-emerald-50/60"
-          : confirmed === false
-          ? "border-red-200 bg-red-50/50 opacity-60"
-          : "border-border/80 bg-card"
-      }`}
+    <button
+      type="button"
+      className="mt-2 w-full max-w-[min(100%,22rem)] overflow-hidden rounded-2xl border border-border/80 bg-card text-left shadow-sm transition-all hover:border-foreground/25 hover:bg-muted/20 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={() => onOpenDetail(msgId, draft)}
     >
       <div className="p-4 space-y-4">
-        {/* Category + note — không ép chung một hàng với số tiền */}
         <div className="flex gap-3">
           <div
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-muted/70 text-2xl leading-none"
@@ -102,12 +152,9 @@ function TransactionConfirmCard({
           </div>
         </div>
 
-        {/* Số tiền + ngày — khối riêng, dễ đọc trên mobile */}
         <div className="rounded-xl bg-muted/45 px-4 py-3.5 space-y-2">
           <div className="flex items-baseline justify-between gap-3">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Số tiền
-            </span>
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Số tiền</span>
             <p
               className={`text-lg font-bold num tabular-nums tracking-tight whitespace-nowrap shrink-0 ${
                 isExpense ? "text-red-600" : "text-emerald-600"
@@ -123,7 +170,6 @@ function TransactionConfirmCard({
           </div>
         </div>
 
-        {/* Location */}
         {draft.location_name && (
           <div className="flex items-start gap-2 rounded-lg bg-muted/30 px-3 py-2.5 text-sm text-muted-foreground">
             <MapPin className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground/80" />
@@ -131,100 +177,26 @@ function TransactionConfirmCard({
           </div>
         )}
 
-        {/* Fallback category selector — shown when AI could not match */}
-        {!hasCategory && confirmed === undefined && draft.allCategories && draft.allCategories.length > 0 && (
-          <div className="space-y-2.5 rounded-xl border border-amber-200/80 bg-amber-50/50 p-3">
-            <div className="flex items-start gap-2 text-sm text-amber-900">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span className="leading-snug">AI chưa khớp danh mục. Chọn danh mục bên dưới:</span>
-            </div>
-            <Select value={selectedCatId} onValueChange={setSelectedCatId}>
-              <SelectTrigger className="h-11 w-full text-sm bg-background">
-                <SelectValue placeholder="Chọn danh mục…" />
-              </SelectTrigger>
-              <SelectContent>
-                {draft.allCategories.map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)} className="text-sm">
-                    {c.icon ?? "💰"} {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
+        <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-3 text-xs font-medium text-muted-foreground">
+          <span>Chạm để mở chi tiết — lưu / sửa / xóa nháp</span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/80" aria-hidden />
+        </div>
       </div>
-
-      {/* Actions: xếp dọc trên mobile để chữ không bị rớt dòng; ngang trên màn rộng */}
-      {confirmed === undefined && (
-        <div className="flex flex-col gap-2.5 border-t border-border/60 bg-muted/15 p-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="h-12 w-full rounded-xl border-border/80 font-medium"
-            onClick={onReject}
-            disabled={isPending}
-          >
-            <XCircle className="h-4 w-4 shrink-0" />
-            <span className="whitespace-nowrap">Hủy</span>
-          </Button>
-          <Button
-            type="button"
-            size="lg"
-            className="h-12 w-full rounded-xl bg-emerald-600 font-semibold text-white hover:bg-emerald-700"
-            onClick={() => {
-              const catId = hasCategory
-                ? draft.categoryId
-                : selectedCatId
-                ? parseInt(selectedCatId)
-                : undefined;
-              onConfirm(catId);
-            }}
-            disabled={isPending || (!hasCategory && !selectedCatId)}
-          >
-            {isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-            ) : (
-              <CheckCircle className="h-4 w-4 shrink-0" />
-            )}
-            <span className="whitespace-nowrap">Xác nhận ghi</span>
-          </Button>
-        </div>
-      )}
-
-      {confirmed === true && (
-        <div className="flex items-center justify-center gap-2 border-t border-emerald-200/80 bg-emerald-50/40 px-4 py-3.5 text-sm font-medium text-emerald-700">
-          <CheckCircle className="h-4 w-4 shrink-0" />
-          <span className="text-center leading-snug">Đã ghi vào giao dịch</span>
-        </div>
-      )}
-
-      {confirmed === false && (
-        <div className="flex items-center justify-center gap-2 border-t border-red-200/80 bg-red-50/30 px-4 py-3.5 text-sm font-medium text-red-600">
-          <XCircle className="h-4 w-4 shrink-0" />
-          <span>Đã hủy</span>
-        </div>
-      )}
-    </div>
+    </button>
   );
 }
 
 function MessageBubble({
   msg,
-  onConfirm,
-  onReject,
-  pendingMsgId,
+  onOpenDetail,
 }: {
   msg: Message;
-  onConfirm: (msgId: string, draft: TransactionDraft, overrideCategoryId?: number) => void;
-  onReject: (msgId: string) => void;
-  pendingMsgId: string | null;
+  onOpenDetail: (msgId: string, draft: AiTransactionDraft) => void;
 }) {
   const isUser = msg.role === "user";
 
   return (
     <div className={`flex gap-2.5 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
-      {/* Avatar */}
       <div
         className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
           isUser ? "bg-foreground text-background" : "bg-muted border"
@@ -233,24 +205,23 @@ function MessageBubble({
         {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
       </div>
 
-      {/* Content */}
       <div className={`max-w-[82%] space-y-1 ${isUser ? "items-end" : "items-start"} flex flex-col`}>
         <div
-          className={`rounded-2xl px-3.5 py-2.5 text-sm ${
-            isUser ? "bg-foreground text-background rounded-tr-sm" : "bg-muted rounded-tl-sm"
+          className={`rounded-2xl text-sm ${
+            isUser
+              ? "bg-foreground px-3.5 py-2.5 text-background rounded-tr-sm"
+              : "bg-muted px-3 py-2 leading-snug rounded-tl-sm max-md:text-[13px] max-md:leading-snug md:px-3.5 md:py-2.5"
           }`}
         >
-          <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+          <p className="whitespace-pre-wrap">{msg.content}</p>
         </div>
 
-        {/* Transaction confirm card */}
         {msg.intent === "RECORD" && msg.transaction && (
-          <TransactionConfirmCard
+          <TransactionDraftCard
             draft={msg.transaction}
-            onConfirm={(overrideCatId) => onConfirm(msg.id, msg.transaction!, overrideCatId)}
-            onReject={() => onReject(msg.id)}
+            msgId={msg.id}
             confirmed={msg.confirmed}
-            isPending={pendingMsgId === msg.id}
+            onOpenDetail={onOpenDetail}
           />
         )}
 
@@ -263,37 +234,51 @@ function MessageBubble({
 }
 
 export default function AIChat() {
+  const [, setLocation] = useLocation();
+  const search = useSearch();
+
   const [sessionId] = useState(() => generateSessionId());
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
       role: "assistant",
       content:
-        "Xin chào! Tôi là FinTrack AI 👋\n\nBạn có thể nói với tôi:\n• Ghi chi tiêu: \"35k cà phê ở Highlands\"\n• Ghi thu nhập: \"Lương tháng 15 triệu\"\n• Hỏi báo cáo: \"Tổng chi tiêu tháng này?\"\n• Thị trường: \"Giá vàng hôm nay?\"",
+        "Xin chào! Tôi là FinTrack AI 👋\n\nBạn có thể nói với tôi:\n• Ghi chi tiêu: \"35k cà phê ở Highlands\"\n• Ghi thu nhập: \"Lương tháng 15 triệu\"",
       timestamp: new Date(),
     },
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [pendingMsgId, setPendingMsgId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const utils = trpc.useUtils();
   const chatMutation = trpc.ai.chat.useMutation();
-  const createTxMutation = trpc.transaction.create.useMutation({
-    onSuccess: () => {
-      utils.transaction.list.invalidate();
-      utils.category.list.invalidate();
-      utils.report.monthly.invalidate();
-      utils.report.yoy.invalidate();
-      utils.report.budgetStatus.invalidate();
-    },
-  });
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const saved = params.get("ai_saved");
+    const discard = params.get("ai_discard");
+    if (!saved && !discard) return;
+
+    if (saved) {
+      setMessages((prev) => prev.map((m) => (m.id === saved ? { ...m, confirmed: true } : m)));
+      removeAiChatDraft(saved);
+    }
+    if (discard) {
+      setMessages((prev) => prev.map((m) => (m.id === discard ? { ...m, confirmed: false } : m)));
+      removeAiChatDraft(discard);
+    }
+    setLocation("/ai-chat", { replace: true });
+  }, [search, setLocation]);
+
+  function openDraftDetail(msgId: string, draft: AiTransactionDraft) {
+    storeAiChatDraft(msgId, { draft });
+    setLocation(`/ai-chat/draft/${encodeURIComponent(msgId)}`);
+  }
 
   async function sendMessage(text: string) {
     if (!text.trim() || isTyping) return;
@@ -315,7 +300,7 @@ export default function AIChat() {
         sessionId,
       });
 
-      const tx = result.transaction as TransactionDraft | null;
+      const tx = result.transaction as AiTransactionDraft | null;
 
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -343,51 +328,12 @@ export default function AIChat() {
     }
   }
 
-  async function handleConfirm(msgId: string, draft: TransactionDraft, overrideCategoryId?: number) {
-    const catId = overrideCategoryId ?? draft.categoryId;
-
-    if (!catId) {
-      toast.error("Vui lòng chọn danh mục trước khi ghi.");
-      return;
-    }
-
-    setPendingMsgId(msgId);
-    try {
-      await createTxMutation.mutateAsync({
-        categoryId: catId,
-        type: draft.type,
-        amount: draft.amount,
-        note: draft.note || undefined,
-        locationName: draft.location_name ?? undefined,
-        transactionDate: draft.date === "today" ? todayString() : draft.date,
-        source: "ai_chat",
-        aiRawInput: undefined,
-      });
-
-      setMessages((prev) =>
-        prev.map((m) => (m.id === msgId ? { ...m, confirmed: true } : m))
-      );
-      toast.success(`✅ Đã ghi: ${draft.amount_display} ₫`);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Lỗi khi ghi giao dịch";
-      toast.error(msg);
-    } finally {
-      setPendingMsgId(null);
-    }
-  }
-
-  function handleReject(msgId: string) {
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msgId ? { ...m, confirmed: false } : m))
-    );
-  }
-
   return (
-    <div className="flex flex-col min-h-[calc(100vh-4rem)] max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="px-3 sm:px-6 py-4 border-b bg-background/95 backdrop-blur-sm">
+    <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col md:min-h-[calc(100vh-4rem)] md:flex-none">
+      {/* Mobile: một hàng tiêu đề trong DashboardLayout — tránh trùng logo */}
+      <div className="hidden shrink-0 border-b bg-background/95 px-6 py-3 backdrop-blur-sm md:block">
         <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-foreground flex items-center justify-center">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-foreground">
             <Sparkles className="h-4 w-4 text-background" />
           </div>
           <div>
@@ -401,52 +347,45 @@ export default function AIChat() {
         </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-4">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-3 py-2 md:space-y-4 md:px-6 md:py-4">
         {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            msg={msg}
-            onConfirm={handleConfirm}
-            onReject={handleReject}
-            pendingMsgId={pendingMsgId}
-          />
+          <MessageBubble key={msg.id} msg={msg} onOpenDetail={openDraftDetail} />
         ))}
 
         {isTyping && (
-          <div className="flex gap-2.5">
-            <div className="h-7 w-7 rounded-full bg-muted border flex items-center justify-center shrink-0">
+          <div className="flex gap-2">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-muted">
               <Bot className="h-3.5 w-3.5" />
             </div>
-            <div className="bg-muted rounded-2xl rounded-tl-sm">
+            <div className="rounded-2xl rounded-tl-sm bg-muted">
               <TypingIndicator />
             </div>
           </div>
         )}
 
-        <div ref={messagesEndRef} />
+        {messages.length <= 1 && (
+          <div>
+            <p className="mb-1.5 text-[11px] text-muted-foreground md:text-xs">Thử ngay</p>
+            <div className="flex flex-wrap gap-1.5 md:gap-2">
+              {SUGGESTED_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => sendMessage(prompt)}
+                  className="rounded-full border bg-background px-2.5 py-1 text-[11px] transition-colors hover:bg-muted md:px-3 md:py-1.5 md:text-xs"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} className="h-px shrink-0" />
       </div>
 
-      {/* Suggested prompts (only on first load) */}
-      {messages.length <= 1 && (
-        <div className="px-3 sm:px-6 pb-3">
-          <p className="text-xs text-muted-foreground mb-2">Thử ngay:</p>
-          <div className="flex flex-wrap gap-2">
-            {SUGGESTED_PROMPTS.map((prompt) => (
-              <button
-                key={prompt}
-                onClick={() => sendMessage(prompt)}
-                className="text-xs px-3 py-1.5 rounded-full border bg-background hover:bg-muted transition-colors"
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Input */}
-      <div className="px-3 sm:px-6 py-3 sm:py-4 border-t bg-background/95 backdrop-blur-sm">
+      {/* Luôn dính đáy vùng main (trên bottom nav) — mobile */}
+      <div className="shrink-0 border-t bg-background/95 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-sm supports-[backdrop-filter]:backdrop-blur md:px-6 md:py-4">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -458,22 +397,19 @@ export default function AIChat() {
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Nhập chi tiêu... VD: 35k cà phê ở Highlands"
-            className="flex-1 h-11 rounded-xl"
+            placeholder="Nhập chi tiêu"
+            className="h-10 flex-1 rounded-xl md:h-11"
             disabled={isTyping}
           />
           <Button
             type="submit"
             size="icon"
-            className="h-11 w-11 rounded-xl shrink-0"
+            className="h-10 w-10 shrink-0 rounded-xl md:h-11 md:w-11"
             disabled={!input.trim() || isTyping}
           >
             {isTyping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
         </form>
-        <p className="text-xs text-muted-foreground text-center mt-2">
-          AI nhận diện giao dịch → xác nhận → ghi vào mục Giao dịch
-        </p>
       </div>
     </div>
   );

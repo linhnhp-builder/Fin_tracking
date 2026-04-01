@@ -19,7 +19,7 @@ function isPortAvailable(port: number): Promise<boolean> {
   });
 }
 
-async function findAvailablePort(startPort: number = 3000): Promise<number> {
+async function findAvailablePort(startPort: number = 8787): Promise<number> {
   for (let port = startPort; port < startPort + 20; port++) {
     if (await isPortAvailable(port)) {
       return port;
@@ -58,15 +58,16 @@ async function startServer() {
     serveStatic(app);
   }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
+  const preferredPort = parseInt(process.env.PORT || "8787", 10);
   const port = await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+    console.warn(`\n⚠️  Port ${preferredPort} is busy — using http://localhost:${port}/ instead\n`);
   }
 
   server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+    const url = `http://localhost:${port}/`;
+    console.log(`\n  FinTrack — mở trình duyệt tại:\n  → ${url}\n  (hoặc http://127.0.0.1:${port}/)\n`);
   });
 }
 

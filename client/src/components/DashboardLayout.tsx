@@ -42,7 +42,7 @@ const menuItems = [
   { icon: Tag, label: "Danh mục", path: "/categories" },
   { icon: Bot, label: "AI Chat", path: "/ai-chat" },
   { icon: Receipt, label: "Giao dịch", path: "/transactions" },
-  { icon: TrendingUp, label: "Đầu tư", path: "/investments" },
+  { icon: TrendingUp, label: "Tài sản", path: "/investments" },
   { icon: BarChart3, label: "Báo cáo", path: "/reports" },
 ];
 
@@ -100,8 +100,13 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find((item) => item.path === location);
+  const activeMenuItem = menuItems.find((item) =>
+    item.path === "/ai-chat"
+      ? location === "/ai-chat" || location.startsWith("/ai-chat/")
+      : item.path === location
+  );
   const isMobile = useIsMobile();
+  const isAiChatArea = location === "/ai-chat" || location.startsWith("/ai-chat/");
 
   useEffect(() => {
     if (isCollapsed) setIsResizing(false);
@@ -161,7 +166,10 @@ function DashboardLayoutContent({
           <SidebarContent className="gap-0 pt-2">
             <SidebarMenu className="px-2">
               {menuItems.map((item) => {
-                const isActive = location === item.path;
+                const isActive =
+                  item.path === "/ai-chat"
+                    ? location === "/ai-chat" || location.startsWith("/ai-chat/")
+                    : location === item.path;
                 return (
                   <SidebarMenuItem key={item.path}>
                     <SidebarMenuButton
@@ -234,25 +242,49 @@ function DashboardLayoutContent({
       <SidebarInset>
         {/* Mobile header */}
         {isMobile && (
-          <div className="flex border-b h-14 items-center justify-between bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
-            <div className="flex items-center gap-3">
-              <div className="h-6 w-6 rounded-md bg-foreground flex items-center justify-center shrink-0">
-                <span className="text-background font-bold text-xs">F</span>
+          <div className="flex h-14 shrink-0 items-center border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:backdrop-blur">
+            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground">
+                <span className="text-[11px] font-bold text-background">F</span>
               </div>
-              <span className="font-semibold text-sm">
-                {activeMenuItem?.label ?? "FinTrack AI"}
-              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold leading-tight">
+                  {activeMenuItem?.label ?? "FinTrack AI"}
+                </p>
+                {isAiChatArea ? (
+                  <p className="truncate text-[11px] text-muted-foreground leading-tight">
+                    Ghi chi tiêu bằng ngôn ngữ tự nhiên
+                  </p>
+                ) : null}
+              </div>
             </div>
+            {isAiChatArea ? (
+              <span className="ml-2 flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                Sẵn sàng
+              </span>
+            ) : null}
           </div>
         )}
-        <main className={`flex-1 overflow-auto ${isMobile ? "pb-20" : ""}`}>{children}</main>
+        <main
+          className={`flex-1 ${isMobile ? "pb-20" : ""} ${
+            isMobile && isAiChatArea
+              ? "flex min-h-0 flex-col overflow-hidden"
+              : "overflow-auto"
+          }`}
+        >
+          {children}
+        </main>
 
         {/* Mobile bottom navigation */}
         {isMobile && (
           <nav className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
             <div className="flex h-14 items-stretch px-2 gap-2">
               {menuItems.map((item) => {
-                const isActive = location === item.path;
+                const isActive =
+                  item.path === "/ai-chat"
+                    ? location === "/ai-chat" || location.startsWith("/ai-chat/")
+                    : location === item.path;
                 const isAi = item.path === "/ai-chat";
                 return (
                   <button

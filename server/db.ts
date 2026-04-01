@@ -5,8 +5,6 @@ import {
   InsertCategory,
   InsertInvestment,
   InsertInvestmentTransaction,
-  InsertPriceSnapshot,
-  InsertMarketBrandPrice,
   InsertTransaction,
   InsertUser,
 } from "../drizzle/schema";
@@ -331,77 +329,36 @@ export async function createInvestmentTransaction(data: InsertInvestmentTransact
   return result.id as number;
 }
 
-// ─── Price Snapshots ──────────────────────────────────────────────────────────
-export async function getLatestPrices() {
-  const sb = getSupabaseAdmin();
-  const [gold, silver] = await Promise.all([
-    sb.from("price_snapshots").select("*").eq("assetType", "gold").order("fetchedAt", { ascending: false }).limit(1),
-    sb.from("price_snapshots").select("*").eq("assetType", "silver").order("fetchedAt", { ascending: false }).limit(1),
-  ]);
-  if (gold.error) throw new Error(`getLatestPrices gold: ${gold.error.message}`);
-  if (silver.error) throw new Error(`getLatestPrices silver: ${silver.error.message}`);
-  return [...(gold.data ?? []), ...(silver.data ?? [])];
-}
+// ─── n8n market feeds (v3.1) ─────────────────────────────────────────────
+export type N8nFeedRow = {
+  id: number;
+  payload: unknown;
+  source: string | null;
+  ingestedAt: string;
+};
 
-export async function savePriceSnapshot(data: InsertPriceSnapshot) {
+export async function getLatestGoldN8nFeed(): Promise<N8nFeedRow | null> {
   const sb = getSupabaseAdmin();
-  const { error } = await sb.from("price_snapshots").insert(data);
-  if (error) throw new Error(`savePriceSnapshot: ${error.message}`);
-}
-
-// ─── Market Brand Prices ─────────────────────────────────────────────────
-export async function getLatestBrandPrices() {
-  const sb = getSupabaseAdmin();
-  // Because table can contain multiple rows per brand over time, we take the first row found per (assetType, brand)
-  // after ordering by fetchedAt DESC.
   const { data, error } = await sb
-    .from("market_brand_prices")
+    .from("gold_n8n_feed")
     .select("*")
-    .order("fetchedAt", { ascending: false });
-
-  if (error) throw new Error(`getLatestBrandPrices: ${error.message}`);
-
-  const gold: Record<string, number> = {};
-  const silver: Record<string, number> = {};
-  let goldUpdatedAt: string | null = null;
-  let silverUpdatedAt: string | null = null;
-  for (const row of data ?? []) {
-    const assetType = String(row.assetType);
-    const brand = String(row.brand);
-    const buyPrice = typeof row.buyPrice === "number" ? row.buyPrice : parseFloat(String(row.buyPrice ?? "0")) || 0;
-    const fetchedAt = row.fetchedAt ? new Date(row.fetchedAt).toISOString() : null;
-    // Fill only once (latest row).
-    if (assetType === "gold" && gold[brand] == null) gold[brand] = buyPrice;
-    if (assetType === "silver" && silver[brand] == null) silver[brand] = buyPrice;
-    if (assetType === "gold" && goldUpdatedAt == null && fetchedAt) goldUpdatedAt = fetchedAt;
-    if (assetType === "silver" && silverUpdatedAt == null && fetchedAt) silverUpdatedAt = fetchedAt;
-  }
-
-  return {
-    gold,
-    silver,
-    updatedAtByAsset: {
-      gold: goldUpdatedAt,
-      silver: silverUpdatedAt,
-    },
-  };
+    .order("ingestedAt", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getLatestGoldN8nFeed: ${error.message}`);
+  return (data as N8nFeedRow) ?? null;
 }
 
-export async function upsertMarketBrandPrices(items: Array<Omit<InsertMarketBrandPrice, "id" | "fetchedAt">>) {
+export async function getLatestSilverN8nFeed(): Promise<N8nFeedRow | null> {
   const sb = getSupabaseAdmin();
-  const { error } = await sb
-    .from("market_brand_prices")
-    .upsert(
-      items.map((i) => ({
-        assetType: i.assetType,
-        brand: i.brand,
-        buyPrice: String(i.buyPrice),
-        fetchedAt: new Date().toISOString(),
-      })),
-      { onConflict: "assetType,brand" }
-    );
-
-  if (error) throw new Error(`upsertMarketBrandPrices: ${error.message}`);
+  const { data, error } = await sb
+    .from("silver_n8n_feed")
+    .select("*")
+    .order("ingestedAt", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getLatestSilverN8nFeed: ${error.message}`);
+  return (data as N8nFeedRow) ?? null;
 }
 
 // ─── AI Conversations ─────────────────────────────────────────────────────────
