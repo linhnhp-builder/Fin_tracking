@@ -110,3 +110,6 @@ temp/
 *.sqlite
 *.sqlite3
 supabase/migrations
+
+# Local integration tests (n8n webhooks, etc.)
+test-n8n-webhook.mjs
